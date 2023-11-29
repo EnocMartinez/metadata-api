@@ -11,6 +11,8 @@ created: 21/9/23
 import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
+import rich
+import subprocess
 
 # Color codes
 GRN = "\x1B[32m"
@@ -175,3 +177,30 @@ def reverse_dictionary(data):
     :return: reversed dictionary
     """
     return {value: key for key, value in data.items()}
+
+
+def run_subprocess(cmd: str, fail_exit=False):
+    """
+    Runs a command as a subprocess. If the process retunrs 0 returns True. Otherwise prints stderr and stdout and returns False
+    :param cmd: command
+    :return: True/False
+    """
+    if type(cmd) == list:
+        cmd_list = cmd
+    else:
+        cmd_list = cmd.split(" ")
+    proc = subprocess.run(cmd_list, capture_output=True)
+    if proc.returncode != 0:
+        rich.print(f"\n[red]ERROR while running command '{cmd}'")
+        if proc.stdout:
+            rich.print(f"subprocess stdout:")
+            rich.print(f">[bright_black]    {proc.stdout.decode()}")
+        if proc.stderr:
+            rich.print(f"subprocess stderr:")
+            rich.print(f">[bright_black] {proc.stderr.decode()}")
+
+        if fail_exit:
+            exit(1)
+
+        return False
+    return True

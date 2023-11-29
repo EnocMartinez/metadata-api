@@ -9,6 +9,8 @@ license: MIT
 created: 30/11/22
 """
 import pandas as pd
+
+from .common import run_subprocess
 from .metadata_collector import MetadataCollector
 from .data_sources.sensorthings import SensorthingsDbConnector
 import rich
@@ -37,10 +39,22 @@ class DataCollector:
         conf = self.mc.get_document("datasets", dataset_id)
         if conf["dataSource"] == "sensorthingsdb":
             dataset = self.netcdf_from_sta(conf, time_start, time_end, out_folder)
+
+        elif conf["dataSource"] == "fileserver":
+            dataset = self.zip_from_fileserver(conf, time_start, time_end, out_folder)
         else:
             raise ValueError(f"data_source='{conf['data_source']}' not implemented")
-        return dataset
 
+        if "export" in conf.keys():
+            host = conf["export"]["host"]
+            path = conf["export"]["path"]
+            path = os.path.join(path, dataset_id)
+            rich.print(f"Delivering dataset {dataset} to {host}:{path}")
+            run_subprocess(["ssh", host, f"mkdir -p {path}"])
+            run_subprocess(["rsync", dataset, f"{host}:{path}"])
+        else:
+            rich.print(f"[yellow]WARNING! dataset {dataset_id} doesn't have export options!")
+        return dataset
 
     def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder):
         """
@@ -72,6 +86,22 @@ class DataCollector:
             metadata.append(m)
         call_generator(dataframes, metadata, output=filename)
         return filename
+
+    def zip_from_fileserver(self, conf, time_start, time_end, out_folder) -> str:
+        rich.print("[yellow]WARNING! zipping all data in server! slicing not yet implemented!")
+        source_path = conf["dataSourceOptions"]["path"]
+        dataset_id = conf["#id"]
+        dest_path = os.path.join(conf["export"]["path"], dataset_id)
+        filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".zip"
+        filename = os.path.join(dest_path, filename)
+
+        cmd = f"zip -r {filename} {source_path}"
+        rich.print(cmd)
+        run_subprocess(["ssh", conf["export"]["host"], f"mkdir -p {dest_path}"])
+        rich.print(f'ssh {conf["export"]["host"]} {cmd}')
+        run_subprocess(["ssh", conf["export"]["host"], cmd])
+
+        rich.print("[green]done!")
 
     def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list, os_data_mode="R",
                             os_data_type="OceanSITES time-series data", tstart="", tend="") -> dict:

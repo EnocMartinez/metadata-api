@@ -190,7 +190,7 @@ class MetadataCollector:
         return strip_mongo_ids(documents)
 
     # --------- Document Operations --------- #
-    def insert_document(self, collection: str, document: dict, author="enoc_martinez", force=False):
+    def insert_document(self, collection: str, document: dict, author="enoc_martinez", force=False, force_meta=False):
         """
         Adds metadata to a document and then inserts it to a collection.
         :param collection:
@@ -205,17 +205,20 @@ class MetadataCollector:
         if document["#id"] in self.get_identifiers(collection):
             raise NameError(f"{collection} document with id {document['#id']} already exists!")
 
-        now = get_timestamp_string()
-        rich.print("Adding metadata to document...")
-        new_document = {
-            "#id": document["#id"],
-            "#version": 1,
-            "#creationDate": now,
-            "#modificationDate": now,
-            "#author": author,
-        }
-        contents = {key: value for key, value in document.items() if not key.startswith("#")}
-        new_document.update(contents)
+        if not force_meta:  # By default generate the metadata
+            now = get_timestamp_string()
+            rich.print("Adding metadata to document...")
+            new_document = {
+                "#id": document["#id"],
+                "#version": 1,
+                "#creationDate": now,
+                "#modificationDate": now,
+                "#author": author,
+            }
+            contents = {key: value for key, value in document.items() if not key.startswith("#")}
+            new_document.update(contents)
+        else: # force input metadata
+            new_document = document
 
         self.validate_document(new_document, collection, exception=(not force))
         self.db[collection].insert_one(new_document.copy())  # use copy to avoid pymongo to modify original dict

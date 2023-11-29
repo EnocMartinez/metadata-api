@@ -14,14 +14,12 @@ mmm_metadata = {
     "required": ["#id", "#version", "#creationDate", "#modificationDate", "#author"]
 }
 
-
-
 # --------- Generic ----------- #
 
 __string_list__ = {
     "type": "array",
     "minItems": 1,
-    "items": {"type": "string" }
+    "items": {"type": "string"}
 }
 
 __label_definition = {
@@ -43,43 +41,72 @@ __coordinates__ = {
     "required": ["latitude", "longitude", "depth"]
 }
 
+__data_types__ = {
+    "type": "string",
+    "enum": [
+        # time-series
+        "timeseries",  # fix-point timeseries
+        "profile",  # depth-dependant timeseries. Depth is usually stored as integer to simplify indexing
+        # others
+        "files",  # arbitrary file-based data, such as audio, pictures or video.
+        "detections"  # event detections based from other data. An example is fish detections from a picture
+    ]
+}
+
+__data_sources__ = {
+    "type": "string",
+    "enum": [
+        "sensorthings-db",              # regular SensorThings database
+        "sensorthings-tsdb",            # SensorThings raw-data hypertable (TimescaleDB)
+        "sensorthings-tsdb-profile",    # SensorThings profiles-data hypertable (TimescaleDB)
+        "filesystem"  # files in a directory tree in the filesystem, like year/month/day/myfile.txt
+    ]
+}
 
 # ----------- Conventions ------------ #
-__doi_roles__ = [    # Roles for dataset attribution from MetadataKernel
-    "ContactPerson", # Person with knowledge of how to access, troubleshoot, or otherwise field issues related to the resource
-    "DataCollector", # Person/institution responsible for finding or gathering/collecting data
-    "DataCurator",   # Person tasked with reviewing, enhancing, cleaning, or standardizing metadata
-    "DataManager",   # Person responsible for maintaining the finished resource
-    "Distributor",   # Institution tasked with responsibility to generate/disseminate copies of  the resource in either electronic or print form
-    "Editor", # A person who oversees the details related to the publication format of the resource
-    "ProjectLeader", # Person officially designated as head of project team or sub project team instrumental
-    "HostingInstitution", # Typically, the organisation allowing the resource to be available on the internet through the provision of its hardware/software/operating support     "Researcher", # A person involved in analysing data or the results of an experiment or formal study
-    "ProjectLeader", # Person officially designated as head of project team or sub- project team instrumental in the work necessary to development of the resource
-    "RelatedPerson", # A person without a specifically defined role in the development of the resource, but who is someone the author wishes to recognize
-    "Researcher", # A person involved in analysing data or the results of an experiment or formal study.
-    "ResearchGroup", # Typically refers to a group of individuals with a lab, department, or division that has a specifically defined focus of activity.
-    "RightsHolder", # Person or institution owning or managing property rights, including intellectual property rights over the resource
-    "Other", # Any person or institution making a significant contribution to the development and/or maintenance of the
-             # resource, but whose contribution is not adequately described by any of the other values
+__doi_roles__ = [  # Roles for dataset attribution from MetadataKernel
+    "ContactPerson",
+    # Person with knowledge of how to access, troubleshoot, or otherwise field issues related to the resource
+    "DataCollector",  # Person/institution responsible for finding or gathering/collecting data
+    "DataCurator",  # Person tasked with reviewing, enhancing, cleaning, or standardizing metadata
+    "DataManager",  # Person responsible for maintaining the finished resource
+    "Distributor",
+    # Institution tasked with responsibility to generate/disseminate copies of  the resource in either electronic or print form
+    "Editor",  # A person who oversees the details related to the publication format of the resource
+    "ProjectLeader",  # Person officially designated as head of project team or sub project team instrumental
+    "HostingInstitution",
+    # Typically, the organisation allowing the resource to be available on the internet through the provision of its hardware/software/operating support     "Researcher", # A person involved in analysing data or the results of an experiment or formal study
+    "ProjectLeader",
+    # Person officially designated as head of project team or sub- project team instrumental in the work necessary to development of the resource
+    "RelatedPerson",
+    # A person without a specifically defined role in the development of the resource, but who is someone the author wishes to recognize
+    "Researcher",  # A person involved in analysing data or the results of an experiment or formal study.
+    "ResearchGroup",
+    # Typically refers to a group of individuals with a lab, department, or division that has a specifically defined focus of activity.
+    "RightsHolder",
+    # Person or institution owning or managing property rights, including intellectual property rights over the resource
+    "Other",  # Any person or institution making a significant contribution to the development and/or maintenance of the
+    # resource, but whose contribution is not adequately described by any of the other values
 ]
 
 __operation_roles__ = [
     # People onboard
-    "diver",      # Person who participates in a diving operation, may also participate in operations onboard
-    "crewMember", # person who participates in operations in a boat but does not dive
-    "captain",    # boat driver
+    "diver",  # Person who participates in a diving operation, may also participate in operations onboard
+    "crewMember",  # person who participates in operations in a boat but does not dive
+    "captain",  # boat driver
 
     # land-base roles
     "operator",  # person who operates a machine or process
-    "other"     # all others
+    "other"  # all others
 ]
 
 __device_roles__ = [
-    "owner",    # institution owning a station/sensor
-    "operator", # person responsible to operate certain station/sensor
-    "principalInvestigator", # PI of a station/sensor
+    "owner",  # institution owning a station/sensor
+    "operator",  # person responsible to operate certain station/sensor
+    "principalInvestigator",  # PI of a station/sensor
     "dataManager"
 ]
+
 
 def __contacts_with_roles__(roles: list):
     # Generate an array of either people or organization with a certain role list, defined as argument
@@ -128,28 +155,27 @@ def __people_with_roles__(roles: list):
 
 __activity_type__ = [
     "deployment",  # Deployment of a instrument, platform or resource
-    "recovery",    # recovery a previously deployed asset
-    "cleaning",    # cleaning of a sensor, probably removing biofouling
-    "maintenance", # operation to ensure the proper functionality of an asset, such as replacing broken parts
-    "test",        # activity to test the proper functionality of a sensor/platform/resource
+    "recovery",  # recovery a previously deployed asset
+    "cleaning",  # cleaning of a sensor, probably removing biofouling
+    "maintenance",  # operation to ensure the proper functionality of an asset, such as replacing broken parts
+    "test",  # activity to test the proper functionality of a sensor/platform/resource
     "other"
 ]
 
 __operation_type__ = [
-    "intervention",# Surface or underwater intervention into sensor/station/resource
-    "cruise",      # several activities carried out during a cruise
-    "test",        # test the functionality of a device
-    "other"        # any other option
+    "intervention",  # Surface or underwater intervention into sensor/station/resource
+    "cruise",  # several activities carried out during a cruise
+    "test",  # test the functionality of a device
+    "other"  # any other option
 ]
 
 __project_types__ = [
-    "european", # Project funded by the European Comission
-    "national", # Project funded by the national science ministry (or similar)
+    "european",  # Project funded by the European Comission
+    "national",  # Project funded by the national science ministry (or similar)
     "contract"  # Project with a company, EU or national project regulations do not apply
 ]
 
 __partnership_types__ = ["participant", "thirdParty", "other"]
-
 
 # -----------------------------#
 
@@ -179,11 +205,61 @@ __organizations = {
     "required": ["fullName", "acronym"]
 }
 
+# ------------------------------------------------- #
+# -------------------- Sensors -------------------- #
+# ------------------------------------------------- #
+# Sensors define every sensor, which variables is
+# it measuring and also the processing, which include
+# pre-processing (AI-based inference) or post-processing
+# (averaged data)
+
+
+__inference_parameters = {
+    "type": "object",
+    "properties": {
+        "model": {"type": "string"},  # url where the model is published
+        "info": {"type": "string"}  # free-text comment
+    },
+    "required": ["model"]
+}
+
+
+__average_parameters = {
+    "type": "object",
+    "properties": {
+        "period": {"type": "string"},  # period of the average, such as
+        "ignore": __string_list__    # list of variables to ignore in the average (e.g. battery level)
+    },
+    "required": ["period"]
+}
+
+__process_options = {
+    "type": "object",
+    "properties": {
+        "type": {
+            "type": "string",
+            "enum": ["average", "inference"]
+        },
+        "parameters": {"type": "object"}
+    },
+    "required": ["type", "parameters"],
+    "if": {
+        "properties": {"type": {"const": "average"}}
+    },
+    "then": {
+        "parameters": __average_parameters
+    },
+    "else": {
+        "parameters": __inference_parameters
+    }
+}
+
 
 __sensors = {
     "$id": "mmm:sensors",
     "type": "object",
     "properties": {
+        "description": {"type": "string"},
         "shortName": {"type": "string"},
         "longName": {"type": "string"},
         "serialNumber": {"type": "string"},
@@ -199,13 +275,19 @@ __sensors = {
                     "@variables": {"type": "string"},
                     "@units": {"type": "string"},
                     "@qualityControl": {"type": "string"},
+                    "dataType": __data_types__,
+                    "technical": {"type": "boolean"}  # define as technical variable, not of interest for datasets
                 },
-                "required": ["@variables", "@units"]
-            }
+                "required": ["@variables", "@units", "dataType"]
+            },
         },
-
+        "processes": {  # pre-processing or post-processing options
+            "type": "array",
+            "minItems": 1,
+            "items": __process_options
+        }
     },
-    "required": ["shortName", "longName", "instrumentType"]
+    "required": ["description", "shortName", "longName", "serialNumber", "instrumentType", "model", "manufacturer"]
 }
 
 __stations = {
@@ -251,11 +333,22 @@ __datasets = {
                 "type": "string",
             }
         },
-        "dataType": {"type": "string"},
-        "dataSource": {"type": "string"},
+        "dataType": __data_types__,  # may be redundant, but helps parsing info
+        "dataSource": __data_sources__,
+        "dataSourceOptions": {"type": "object"},
+        "export": {
+            "type": "object",
+            "properties": {
+                "namePattern": {"type": "string"},
+                "period": {"type": "string"},
+                "host": {"type": "string"},
+                "path": {"type": "string"}
+            },
+            "required": ["namePattern", "period", "path", "host"]
+        },
         "contacts": __contacts_with_roles__(__doi_roles__)
     },
-    "required": ["title", "summary", "@stations", "@sensors", "dataType", "dataSource", "contacts"]
+    "required": ["title", "summary", "@stations", "@sensors", "dataType", "dataSource", "contacts", "dataSourceOptions", "export"]
 }
 
 __activities = {
@@ -279,7 +372,7 @@ __activities = {
                 {"required": ["@sensors"], "not": {"required": ["@stations", "@resources"]}},
                 {"required": ["@stations"], "not": {"required": ["@sensors", "@resources"]}},
                 {"required": ["@resources"], "not": {"required": ["@sensors", "@stations"]}}
-                ]
+            ]
         },
         "where": {
             "type": "object",
@@ -291,7 +384,6 @@ __activities = {
     },
     "required": ["name", "appliedTo", "time"]
 }
-
 
 __operations = {
     "$id": "mmm:operations",
@@ -327,7 +419,6 @@ __operations = {
     },
     "required": ["description", "timeRange", "type", "participants", "@activities"],
 }
-
 
 __variables = {
     "$id": "mmm:variable",
@@ -389,5 +480,5 @@ mmm_schemas = {
     "operations": __operations,
     "activities": __activities,
     "projects": __projects,
-    #"resources": {}
+    # "resources": {}
 }

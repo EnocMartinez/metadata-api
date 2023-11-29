@@ -150,7 +150,7 @@ def compoare_fs_to_db(db_data, fs_data) -> list:
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
-    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets-local.yaml")
+    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets-test.yaml")
     argparser.add_argument("-g", "--get", help="Get all metadata from a MongoDB and stores it to JSON files", action="store_true")
     argparser.add_argument("-p", "--put", help="Puts all metadata from folder and  and stores it to JSON", action="store_true")
     argparser.add_argument("-S", "--status", help="Shows documents that have been modified", action="store_true")
@@ -161,6 +161,7 @@ if __name__ == "__main__":
     argparser.add_argument("--clear-history", help="Delete ALL history and reset version to 1", action="store_true")
     argparser.add_argument("--healthcheck", help="Ensure all relations", action="store_true")
     argparser.add_argument("--force", help="Force put, ignore all checks", action="store_true")
+    argparser.add_argument("-m", "--force-metadata", help="Force the metadata as is in the document", action="store_true")
 
     args = argparser.parse_args()
     
@@ -196,6 +197,10 @@ if __name__ == "__main__":
         store_to_filesystem(db_data, folder_hist, verbose=args.verbose, subset=collections, history=True)
         rich.print("[green]done!")
         exit()
+
+    force_meta = False
+    if args.force_metadata:
+        force_meta = True
 
     os.makedirs(folder, exist_ok=True)
     if args.get and args.put:
@@ -244,16 +249,18 @@ if __name__ == "__main__":
             action = record["action"]
             if collection not in collections:
                 continue
-
+            rich.print(f"action: {action}")
             if action == "replace":
                 mc.replace_document(collection, document_id,  fs_data[collection][document_id], force=args.force)
                 mc.get_document(collection, document_id)  # update the local document
                 replaced += 1
             elif action == "create":
-                mc.insert_document(collection, fs_data[collection][document_id], force=args.force)
+                mc.insert_document(collection, fs_data[collection][document_id], force=args.force, force_meta=force_meta)
                 inserted += 1
 
             elif action == "delete":
+                rich.print(f"[red]Do you want to delete document '{document_id}'? ctrl+c to exit")
+                input()
                 mc.delete_document(collection, document_id)
                 deleted += 1
             else:

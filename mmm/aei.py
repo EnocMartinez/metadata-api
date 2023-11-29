@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+    #!/usr/bin/env python3
 """
 Gets data from Agencia Española de Investigación (https://www.aei.gob.es/).
 
@@ -26,6 +26,15 @@ import requests
 import json
 
 
+def csv_with_multiple_lines(text):
+    lines = text.split("\n")
+    header = lines[0]
+    body = lines[1]
+    for line in lines[2:]:
+        body += line
+
+    return header, body
+
 
 def get_aei_metadata(project_id: str) -> dict:
     """
@@ -41,7 +50,11 @@ def get_aei_metadata(project_id: str) -> dict:
     r = requests.get(url, verify=False)  # Yes, the spanish government does not have proper SSL certificate...
     text = r.text
     rich.print(text)
-    header, value = text.split("\n")
+    try:
+        header, value = text.split("\n")
+    except ValueError:
+        header, value = csv_with_multiple_lines(text)
+
     keys = header.replace("\"", "").split(";")
     values = value.replace("\"", "").split(";")
     aei_data = {}

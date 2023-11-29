@@ -30,7 +30,7 @@ def process_extras(extras: dict) -> list:
 
 
 class CkanClient:
-    def __init__(self, mc: MetadataCollector, url, api_key):
+    def __init__(self, mc: MetadataCollector, url, api_key, proj_logos_url="", org_logos_url=""):
         """
         Creates a CKAN client, able to publish datasets
         """
@@ -43,44 +43,8 @@ class CkanClient:
             self.url += "/"
         self.url = self.url + "api/3/action/"
         self.api_key = api_key
-
-    def create_package_from_sensor(self):
-        """
-        Generates a dataset for input sensor
-        :return:
-        """
-        print("Generating a new CKAN dataset (package)")
-
-        dataset_id = self.sensor_conf["resource_id"].replace(" ", "_").lower()
-        self.dataset_id = dataset_id
-
-        #  Check if the dataset already exists
-        dataset = self.check_if_package_exists(dataset_id)
-        if dataset:
-            rich.print("[yellow]Dataset %s already registered!" % dataset_id)
-            self.dataset = dataset
-            self.dataset_url = self.url + "dataset/" + dataset["id"]
-            # return dataset
-
-        else:
-
-            author = self.mc.get_people_from_role(self.sensor_id, "DataManager")
-            owner = self.mc.get_organization_from_role(self.sensor_id, "Owner")
-
-            self.dataset = self.package_create(dataset_id,
-                                                 self.sensor_conf["label"],
-                                                 private=False,
-                                                 description=self.sensor_conf["description"],
-                                                 id=dataset_id,
-                                                 author=author["givenName"] + " " + author["familyName"],
-                                                 author_email=author["email"],
-                                                 owner_org=owner["@id"])
-
-            self.dataset_url = self.url + "dataset/" + self.dataset["id"]
-
-        if self.generate_dois:
-            self.dataset_doi = self.add_doi_to_ckan_element(self.dataset_url, self.dataset, "package")
-
+        self.proj_logos_url = proj_logos_url
+        self.org_logos_url = org_logos_url
 
     def upload_data_link(self, dataset_id, name, description, link):
         return self.resource_create(dataset_id, name.lower() + "_csv_data", name=name, description=description,
@@ -98,13 +62,24 @@ class CkanClient:
         url = self.url + "license_list"
         return self.ckan_get(url)
 
-    def get_dataset_list(self):
+    # --------- Packages (Datasets) ---------#
+    def get_packages(self) -> list:
+        """
+        Get packages with their resources
+        """
         url = self.url + "current_package_list_with_resources"
-        resp = self.ckan_get(url)
-        return resp
+        return self.ckan_get(url)
 
-    def package_create(self, name, title, description="", id="", private=False, author="", author_email="",
-                         license_id="cc-by", groups=[], owner_org=""):
+    def get_package_list(self) -> list:
+        """
+        Get only the list of current packages
+        """
+        url = self.url + "package_list"
+        return self.ckan_get(url)
+
+
+    def package_register(self, name, title, description="", id="", private=False, author="", author_email="",
+                         license_id="cc-by", groups=[], owner_org="", extras={}):
         """
         Generates a CKAN dataset (package), more info:
         https://docs.ckan.org/en/2.9/api/index.html#ckan.logic.action.create.package_create
@@ -119,8 +94,15 @@ class CkanClient:
         :param owner_org:
         :return: CKAN's response as JSON dict
         """
-        url = self.url + "package_create"
-        id = normalize_string(id)
+
+        # check if packaget eixsts
+        action = "create"
+        package_id = normalize_string(id)
+        registered_packages = self.get_package_list()
+
+        if package_id in registered_packages:
+            action = "patch"
+
         data = {
             "name": name,
             "title": title,
@@ -132,21 +114,28 @@ class CkanClient:
             "author_email": author_email,
             "groups": groups,
             "license_id": license_id,
-            # "extras": [{"extra 1": "patata"}, {"extra 2": "amb suc"}]
+            "extras": process_extras(extras)
         }
-        return self.ckan_post(url, data)
 
-    def package_patch(self, patch_data: dict, id: str):
-        """
-        Edit attributes within the patch_data dict. The rest remains unchanged
-        :param patch_data: dict with data to pach
-        :param id: package id
-        :return: dataset dict
-        """
-        url = self.url + f"package_patch"
-        patch_data["id"] = id
-        return self.ckan_post(url, patch_data)
+        if action == "patch":
+            rich.print(f"Package {package_id} already exists, patching...")
+            url = self.url + f"package_patch"
+            return self.ckan_patch(url, data)
+        else:
+            rich.print(f"Registering {package_id}...")
+            url = self.url + "package_create"
+            return self.ckan_post(url, data)
 
+    # def package_patch(self, patch_data: dict, id: str):
+    #     """
+    #     Edit attributes within the patch_data dict. The rest remains unchanged
+    #     :param patch_data: dict with data to pach
+    #     :param id: package id
+    #     :return: dataset dict
+    #     """
+    #     url = self.url + f"package_patch"
+    #     patch_data["id"] = id
+    #     return self.ckan_post(url, patch_data)
 
     def resource_create(self, package_id, id, description="", name="", upload_file=None, resource_url="", format=""):
         """
@@ -266,7 +255,6 @@ class CkanClient:
         url = self.url + "organization_create"
         return self.ckan_post(url, group_data)
 
-
     # ---------------- GROUPS ---------------- #
     def get_group_list(self):
         """
@@ -310,7 +298,6 @@ class CkanClient:
     def ckan_post(self, url, data, file=None):
         headers = {"Authorization": self.api_key}
         resource = []
-        rich.print(data)
         if file:
             resource = [("upload", open(file))]
         else:
@@ -319,21 +306,20 @@ class CkanClient:
 
         resp = requests.post(url, data=data, headers=headers, files=resource)
         if resp.status_code > 300:
-            rich.print(data)
-            raise ValueError(f"CKAN HTTP Error code {resp.status_code}, text: {resp.text}")
+            rich.print(f"[red]{json.dumps(json.loads(resp.text), indent=2)}")
+            raise ValueError(f"CKAN HTTP Error code {resp.status_code}")
         return json.loads(resp.text)["result"]
 
     def ckan_patch(self, url, data):
-        rich.print("url", url)
-        rich.print("data", data)
-
         headers = {"Authorization": self.api_key}
+        identifier = data["id"]
         data = json.dumps(data)
-        headers['Content-Type'] = "application/x-www-form-urlencoded"
+        #headers['Content-Type'] = "application/x-www-form-urlencoded"
         headers['Content-Type'] = "application/json"
-        resp = requests.patch(url, data=data, headers=headers)
+        resp = requests.post(url + f"?id={identifier}", data=data, headers=headers)
         if resp.status_code > 300:
-            raise ValueError(f"CKAN HTTP Error code {resp.status_code}, text: {resp.text}")
+            rich.print(f"[red]{resp.text}")
+            raise ValueError(f"CKAN HTTP Error code {resp.status_code}")
         response = json.loads(resp.text)["result"]
         return response
 
