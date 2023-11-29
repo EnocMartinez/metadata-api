@@ -1,6 +1,7 @@
 secrets.txt
-secrets-local.yaml
+secrets*.yaml
 log/
+MongoData
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
