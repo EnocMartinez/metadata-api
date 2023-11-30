@@ -170,7 +170,7 @@ class MetadataCollector:
         documents = self.get_documents(collection, history=False)
         return [d["#id"] for d in documents]
 
-    def get_documents(self, collection: str, filter={}, history=False, strip=True):
+    def get_documents(self, collection: str, filter={}, history=False, strip=True) -> list:
         """
         Return all documents in a collection
         :param collection:
