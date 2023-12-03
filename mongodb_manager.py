@@ -10,7 +10,7 @@ license: MIT
 created: 21/09/2023
 """
 from argparse import ArgumentParser, ArgumentError
-from mmm.metadata_collector import MetadataCollector
+from mmm.metadata_collector import MetadataCollector, strip_mongo_ids
 import yaml
 import rich
 import os
@@ -124,6 +124,17 @@ def clear_temporal_files(folders: list):
     rich.print(f"Deleted {n} files")
 
 
+def compare_dicts(doc1: dict, doc2: dict) -> bool:
+    """
+    Compares two dicts and returns True if there are differences, False if they are equal
+    """
+    doc1_str = json.dumps(MetadataCollector.strip_metadata_fields(doc1))  # convert to string
+    doc2_str = json.dumps(MetadataCollector.strip_metadata_fields(doc2))
+    if doc1_str == doc2_str:  # compare strings
+        return False
+    return True
+
+
 def compoare_fs_to_db(db_data, fs_data) -> list:
     """
     Compares data in filesystem with data in the database
@@ -137,7 +148,7 @@ def compoare_fs_to_db(db_data, fs_data) -> list:
             if doc_id not in db_data[collection].keys():
                 rich.print(f"[cyan]{collection} {doc_id} new document!")
                 diff.append({"collection": collection, "doc_id": doc_id, "action": "create"})
-            elif db_data[collection][doc_id] != fs_data[collection][doc_id]:
+            elif compare_dicts(db_data[collection][doc_id], fs_data[collection][doc_id]):
                 rich.print(f"[green]{collection} {doc_id} modified!")
                 diff.append({"collection": collection, "doc_id": doc_id, "action": "replace"})
 

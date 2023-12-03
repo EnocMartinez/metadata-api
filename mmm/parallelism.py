@@ -55,7 +55,7 @@ def multiprocess(arg_list, handler, max_workers=20, text: str = "progress..."):
     Splits a repetitive task into several processes
     :param arg_list: each element in the list will crate a thread and its contents passed to the handler
     :param handler: function to be invoked by every thread
-    :param max_threads: Max threads to be launched at once
+    :param max_workers: Max processes to be launched at once
     :return: a list with the results (ordered as arg_list)
     :param text: text to be displayed in the progress bar
     """

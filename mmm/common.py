@@ -30,6 +30,15 @@ RST = "\033[0m"
 
 colors = [GRN, RST, BLU, YEL, RED, MAG, CYN, WHT, NRM, PRL, RST]
 
+qc_flags = {
+    "good": 1,
+    "not_applied": 2,
+    "suspicious": 3,
+    "bad": 4,
+    "missing": 9
+}
+
+
 def setup_log(name, path="log", log_level="debug"):
     """
     Setups the logging module
@@ -204,3 +213,4 @@ def run_subprocess(cmd: str, fail_exit=False):
 
         return False
     return True
+

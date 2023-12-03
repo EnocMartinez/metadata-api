@@ -247,10 +247,11 @@ __process_options = {
         "properties": {"type": {"const": "average"}}
     },
     "then": {
-        "parameters": __average_parameters
+        "properties": {"parameters": __average_parameters},
     },
     "else": {
-        "parameters": __inference_parameters
+        #         "properties": {"properties": {"required": ["path"], "type": "object"}}
+        "properties": {"parameters": __inference_parameters}
     }
 }
 
@@ -283,11 +284,11 @@ __sensors = {
         },
         "processes": {  # pre-processing or post-processing options
             "type": "array",
-            "minItems": 1,
+            "minItems": 0,
             "items": __process_options
         }
     },
-    "required": ["description", "shortName", "longName", "serialNumber", "instrumentType", "model", "manufacturer"]
+    "required": ["description", "shortName", "longName", "serialNumber", "instrumentType", "model", "manufacturer", "processes"]
 }
 
 __stations = {

@@ -10,6 +10,12 @@ This project contains the Metadata API, a RESTful API designed to administrate m
 
 ## Metadata API to SensorThings mappings ##
 
+### Conventions
+
+* MongoDB `#id` fields corresponds to SensorThings `name` field
+* SensorThings entities `name` field must be unique for every collection (database unique restriction added)
+* For every station, a Thing and a FeatureOfInterest are created, sharing the same name
+
 ### Sensors
 
 | MMAPI          | SensorThings                         |
