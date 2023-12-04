@@ -311,7 +311,7 @@ class SensorThingsDbConnector(object):
         self.exec_query("CREATE INDEX \"OBSERVATIONS_FEATURE_ID\" ON public.\"OBSERVATIONS\" USING btree  "
                         "(\"FEATURE_ID\" ASC NULLS LAST)TABLESPACE pg_default;")
 
-    def format_csv_sta(self, df_in, column_mapper, filename, feature_id, avg_period: str = ""):
+    def format_csv_sta(self, df_in, column_mapper, filename, feature_id, avg_period: str = "", profile=False):
         """
         Takes a dataframe and arranges it accordingly to the OBSERVATIONS table from a SensorThings API, preparing the
         data to be inserted by a COPY statement
@@ -334,22 +334,24 @@ class SensorThingsDbConnector(object):
             quality_control = False
             stdev = False
             keep = ["timestamp", colname]
-            if colname + "_qc" in df_in:
+            if colname + "_qc" in df_in.columns:
                 quality_control = True
                 keep += [colname + "_qc"]
 
-            if colname + "_std" in df_in:
+            if colname + "_std" in df_in.columns:
                 stdev = True
                 keep += [colname + "_std"]
+
+            if profile:
+                keep += ["depth"]
 
             df["timestamp"] = df.index.values
             for c in df.columns:
                 if c not in keep:
                     del df[c]
 
-            df = df.dropna(how="any")
             if df.empty:
-                rich.print(f"[yellow]Got empty dataframe after dropping NaNs for varible {colname}")
+                rich.print(f"[yellow]Got empty dataframe for {colname}")
                 continue
 
             df["PHENOMENON_TIME_START"] = np.datetime_as_string(df["timestamp"], unit="s", timezone="UTC")
@@ -368,25 +370,40 @@ class SensorThingsDbConnector(object):
             df["RESULT_QUALITY"] = "{\"qc_flag\": 2}"
             df["VALID_TIME_START"] = np.nan
             df["VALID_TIME_END"] = np.nan
-            df["PARAMETERS"] = np.nan
+            if profile:
+                df["PARAMETERS"] = ""  # in case of profile we need to add depth as parameter
+            else:
+                df["PARAMETERS"] = np.nan
             df["DATASTREAM_ID"] = datastream_id
             df["FEATURE_ID"] = feature_id
             df["ID"] = np.arange(0, len(df.index.values), dtype=int) + self.__last_observation_index + 1
             self.__last_observation_index = df["ID"].values[-1]
 
             # Quality control and standard deviation
-            if quality_control and stdev:
-                for i in range(0, len(df.index.values)):
+            for i in range(0, len(df.index.values)):
+                qc_value = np.nan
+                std_value = np.nan
+                if stdev:
+                    std_value = df[colname + "_std"].values[i]
+                if qc_value:
+                    qc_value = df[colname + "_qc"].values[i]
+                if not np.isnan(qc_value) and stdev and not np.isnan(std_value):
+                    # If we have QC and STD, put both
                     df["RESULT_QUALITY"].values[i] = "{\"qc_flag\": %d, \"stdev\": %f}" % \
                                                      (df[colname + "_qc"].values[i], df[colname + "_std"].values[i])
-            # quality control only
-            elif quality_control:
+                elif not np.isnan(qc_value):
+                    # If we only have QC, put it
+                    if df[colname + "_qc"].values[i]:
+                        df["RESULT_QUALITY"].values[i] = "{\"qc_flag\": %d}" % (df[colname + "_qc"].values[i])
+                elif not np.isnan(std_value):
+                    # If we only have STD, put it
+                    if df[colname + "_std"].values[i]:
+                        df["RESULT_QUALITY"].values[i] = "{\"stdev\": %d}" % (df[colname + "_std"].values[i])
+
+            if profile:
+                df["depth"] = df["depth"].values.astype(int)  # force conversion to integer
                 for i in range(0, len(df.index.values)):
-                    df["RESULT_QUALITY"].values[i] = "{\"qc_flag\": %d}" % (df[colname + "_qc"].values[i])
-            # standard deviation only
-            elif stdev:
-                for i in range(0, len(df.index.values)):
-                    df["RESULT_QUALITY"].values[i] = "{\"stdev\": %f}" % (df[colname + "_std"].values[i])
+                    df["PARAMETERS"].values[i] = "{\"depth\": %d}" % (df["depth"].values[i])
 
             del df["timestamp"]
             del df[colname]
@@ -394,6 +411,8 @@ class SensorThingsDbConnector(object):
                 del df[colname + "_qc"]
             if stdev:
                 del df[colname + "_std"]
+            if profile:
+                del df["depth"]
 
             if not init:
                 df_final = df
@@ -467,17 +486,19 @@ class SensorThingsDbConnector(object):
         del df_final
         gc.collect()
 
-    def dataframes_to_observations_csv(self, dataframes: list, column_mapper: dict, folder: str, feature_id: int, avg_period:str = ""):
+    def dataframes_to_observations_csv(self, dataframes: list, column_mapper: dict, folder: str, feature_id: int, avg_period:str = "", profile=False):
         """
         Write dataframes into local csv files ready for sql copy following the syntax in table OBSERVATIONS
         """
-        arguments = []
+        files = []
         i = 0
         for dataframe in dataframes:
             file = os.path.join(folder, f"observations_copy_{i:04d}.csv")
             i += 1
-            arguments.append((dataframe, column_mapper, file, feature_id, avg_period))
-        return multiprocess(arguments, self.format_csv_sta, max_workers=8, text="Storing data to OBSERVATIONS format")
+            self.format_csv_sta(dataframe, column_mapper, file, feature_id, avg_period=avg_period, profile=profile)
+            files.append(file)
+
+        return files
 
     def dataframes_to_timeseries_csv(self, dataframes: list, column_mapper: dict, folder: str):
         """
@@ -529,13 +550,14 @@ class SensorThingsDbConnector(object):
         rich.print("Dropping observation constrains...")
         self.drop_observations_constrains()
 
-    def inject_to_timeseries(self, df, datastreams, max_rows=100000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy"):
+    def inject_to_timeseries(self, df, datastreams, max_rows=100000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data"):
         """
         Inject all data in df into the timeseries table via SQL copy
         """
 
         init = time.time()
         os.makedirs(tmp_folder, exist_ok=True)
+        os.chown(tmp_folder, os.getuid(), os.getgid())
 
         rich.print("Splitting input dataframe into smaller ones")
         rows = int(max_rows / len(datastreams))
@@ -563,13 +585,14 @@ class SensorThingsDbConnector(object):
 
         rich.print("[magenta]Inserting all via SQL COPY took %.02f seconds" % (time.time() - init))
 
-    def inject_to_profiles(self, df, datastreams, max_rows=100000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy"):
+    def inject_to_profiles(self, df, datastreams, max_rows=100000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data"):
         """
         Inject all data in df into the timeseries table via SQL copy
         """
 
         init = time.time()
         os.makedirs(tmp_folder, exist_ok=True)
+        os.chown(tmp_folder, os.getuid(), os.getgid())
 
         rich.print("Splitting input dataframe into smaller ones")
         rows = int(max_rows / len(datastreams))
@@ -597,14 +620,16 @@ class SensorThingsDbConnector(object):
 
         rich.print("[magenta]Inserting all via SQL COPY took %.02f seconds" % (time.time() - init))
 
-    def inject_to_observations(self, df, datastreams, url, foi_id, avg_period, max_rows=10000, disable_triggers=False,
-                               tmp_folder="/tmp/sta_db_copy"):
+    def inject_to_observations(self, df: pd.DataFrame, datastreams: dict, url: str, foi_id: int, avg_period: str,
+                               max_rows=10000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data",
+                               profile=False):
         """
         Injects all data in a dataframe using SQL copy.
         """
 
         init = time.time()
         os.makedirs(tmp_folder, exist_ok=True)
+        os.chown(tmp_folder, os.getuid(), os.getgid())
         rich.print("POSTing the first row to get the Feature ID")
         self.post_via_api(df, url, df.iloc[0], datastreams, avg_period=avg_period)
         last_row = df.iloc[-1]  # first row inserted via API
@@ -614,7 +639,7 @@ class SensorThingsDbConnector(object):
         rows = int(max_rows / len(datastreams))
         dataframes = slice_dataframes(df, max_rows=rows)
 
-        files = self.dataframes_to_observations_csv(dataframes, datastreams, "sta", tmp_folder, foi_id, avg_period=avg_period)
+        files = self.dataframes_to_observations_csv(dataframes, datastreams, tmp_folder, foi_id, avg_period=avg_period, profile=profile)
         rich.print(f"Generating all files took {time.time() - init:0.02f} seconds")
 
         if disable_triggers:

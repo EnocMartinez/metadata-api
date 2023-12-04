@@ -38,6 +38,6 @@ if __name__ == "__main__":
 
     rich.print(f"OBSERVATIONS size {obs_size/1e6:.02f} MB for {obs_count} lines")
     rich.print(f"timeseries   size {ts_size /1e6:.02f} MB for {ts_count} lines")
-    rich.print(f"timeseries   size {pr_size /1e6:.02f} MB for {pr_count} lines")
+    rich.print(f"profiles     size {pr_size /1e6:.02f} MB for {pr_count} lines")
 
 

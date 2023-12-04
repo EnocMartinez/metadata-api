@@ -33,13 +33,12 @@ if __name__ == "__main__":
     psql_conf = load_fields_from_dict(secrets["sensorthings"], ["database", "user", "host", "port", "password"])
     url = secrets["sensorthings"]["url"]
 
-    if args.average:
-        data_type = "average"
-    elif args.profile:
+    if args.profile:
         data_type = "profile"
+    elif args.average:
+        data_type = "average"
     else:
         data_type = "timeseries"
-
     bulk_load_data(args.file, psql_conf, mc, url, args.sensor_id, data_type, average=args.average)
 
 

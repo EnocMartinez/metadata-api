@@ -1,6 +1,8 @@
 # Metadata API #
 
-This project contains the Metadata API, a RESTful API designed to administrate metadata regarding scientific data and metadata such as observation stations, datasets, operations... This API is heavily influenced by the SensorThings API, but has some major differences:  
+This project contains the Metadata API, a RESTful API designed to administrate metadata regarding scientific data and metadata such as observation stations, datasets, operations, etc. In addition to the API a set of scripts to manage data and metadata are also included.
+
+This API is heavily influenced by the SensorThings API, but has some major differences:  
 
 - It adds additional classes such as people, operations, activities, deployments, projects and more.
 - It does not manage data, just the metadata
@@ -28,26 +30,20 @@ This project contains the Metadata API, a RESTful API designed to administrate m
 | contacts       | NOT mapped                           |
 
 ## Sensors and Datasets ##
+### Data Types ###
 Sensors produce data. Datasets compile data from sensors, easy enough. 
 
 Data coming from sensors is archived depending on the Sensor's data type. Available data types are:
-* **fixed-point**: fixed-point timeseries. Stored in raw_data hypertable
-* **profile**: depth-dependant timeseries. Stored in profile_data hypertable
-* **trajectory**: fixed-point timeseries. Stored in raw_data hypertable. Lat/lon/depth treated as regular variables
-* **files**: File-based sensor. Files can be any multimedia type, such as audio, video, pictures, etc. Each file has an entry in the "OSERVATIONS" table 
+* **timeseries**: fixed-point timeseries. Stored in `timeseries` hypertable
+* **profile**: depth-dependant timeseries. Stored in `profiles` hypertable
+* **average**: data from `timeseries` or `profiles` that has been averaged over a period of time. They are stored in the`"OBSERVATIONS"` table.
+* **files**: File-based sensor. Files can be any multimedia type, such as audio, video, pictures, etc. Each file has an entry in the `"OBSERVATIONS"` table 
 
-The main difference between point and trajectory is when datasets are generated in a later stage.
-
+Trajectory data is stored as regular timeseries data, where the latitude, longitude and depth are treated as timeseries and compiled later.
+### Processes ###
 Every sensor may have a set of "processes" associated. Currently, the associated processes are:
 * **Averaging**: average raw data over a certain period of time. This data will be stored in "OBSERVATIONS".
 * **Inference**: Run an inference to the observation (e.g. run an object detection AI job). The data will be stored as parameters in "OBSERVATIONS". The individual detections may also be stored as separated timeseries in "OBSERVATIONS".
-
-## Datasets ##
-
-Within MMAPI different types of datasets can be declared:
-
-* **timeseries**: Regular timeseries dataset (fix-point, profile or trajectory) 
-* **files**: Any kind of data produced periodically as files. Can be pictures, video, audio, etc.
 
 ### Contact info ###
 

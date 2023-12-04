@@ -283,10 +283,13 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 period = process["parameters"]["period"]
                 for var in sensor["variables"]:
                     varname = var["@variables"]
+                    if "ignore" in process["parameters"].keys() and varname in process["parameters"]["ignore"]:
+                        rich.print(f"[yellow]Average ignores {varname}...")
+                        continue
                     units = var["@units"]
                     data_type = var["dataType"]
                     obs_prop_id = obs_props_ids[varname]
-                    if var["dataType"] == "timeseries":  # creating raw_data timeseries
+                    if var["dataType"] == "timeseries" or var["dataType"] == "profile":  # creating raw_data timeseries
                         ds_name = f"{station}:{sensor_name}:{varname}:{period}_average"
                         ds_full_data_name = f"{station}:{sensor_name}:{varname}:{period}full_data"
                         units_doc = mc.get_document("units", units)
@@ -297,6 +300,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                             "averagePeriod": period,
                             "averageFrom": ds_full_data_name
                         }
+
                         ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id,
                                         properties=properties)
                         ds.register(url, update=update)
@@ -323,40 +327,45 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
     # Harcoded solution: name is expected to be station:sensor:variable:processing_type
     datastream_dict = {}
     if data_type == "timeseries":
+        rich.print(f"[purple]====> timeseries {sensor_name} <=======")
+
         # Keep elements with full data
         df = drop_duplicated_indexes(df)
-        rich.print("looking for full data elements")
         datastreams = {key: value for key, value in datastreams.items() if key.endswith("full_data")}
         datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
         rich.print("[green]start data bulk load")
         db.inject_to_timeseries(df, datastreams)
+
+    elif data_type == "profile" and average:
+        rich.print(f"[purple]====> profile with average {sensor_name} <=======")
+
+        station_name = list(datastreams.keys())[0].split(":")[0]
+        datastreams = {key: value for key, value in datastreams.items() if key.endswith(f"{average}_average")}
+        datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
+
+        rich.print(f"station name: {station_name}")
+        foi_id = db.value_from_query(f'select "ID" from "FEATURES" where "NAME" = \'{station_name}\';')
+        rich.print(datastreams)
+        db.inject_to_observations(df, datastreams, url, foi_id, average, profile=True)
+
     elif data_type == "profile":
-        rich.print("looking for full data elements")
+        rich.print(f"[purple]====> profile  {sensor_name} <=======")
         datastreams = {key: value for key, value in datastreams.items() if key.endswith("full_data")}
         datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
         rich.print("[green]start data bulk load")
         db.inject_to_profiles(df, datastreams)
+
     else:
+        rich.print(f"[purple]====> average {sensor_name}<=======")
         rich.print(f"looking for elements with '{average}' average period")
         rich.print(f"looking for {average} averaged elements")
         datastreams = {key: value for key, value in datastreams.items() if key.endswith(f"{average}_average")}
 
         # The first part of a datastream name is the station name
         station_name = list(datastreams.keys())[0].split(":")[0]
-
         datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
         rich.print("[green]start data bulk load")
 
         rich.print(f"station name: {station_name}")
         foi_id = db.value_from_query(f'select "ID" from "FEATURES" where "NAME" = \'{station_name}\';')
         db.inject_to_observations(df, datastreams, url, foi_id, average)
-
-    # Keep only the variable, not the full datastream name
-    rich.print(datastreams)
-
-
-
-    # inject_to_database(self, df, datastreams, db_type="sta", api_url="", local_tmp_folder="/tmp/sta_copy_to_db",
-    #                            remote_tmp_folder="/tmp/sta_db_copy", max_rows=100000, disable_triggers=False,
-    #                            datadir="", avg_period: str = ""):
-

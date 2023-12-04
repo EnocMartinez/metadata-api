@@ -121,9 +121,28 @@ class TimescaleDb:
         query = f"SELECT add_compression_policy('{table_name}', INTERVAL '{policy}'); "
         self.db.exec_query(query)
 
-    def compress_all(self, table_name):
-        query = f"SELECT compress_chunk(i) from show_chunks('{table_name}', now(), now() - interval '100 years') i;"
+    def compress_all(self, table_name, older_than="30days"):
+        query = f"""
+            SELECT compress_chunk(i, if_not_compressed => true) from 
+            show_chunks(
+            '{table_name}',
+             now() - interval '{older_than}',
+              now() - interval '100 years') i;
+              """
         self.db.exec_query(query)
+
+    def compression_stats(self, table) -> (float, float, float):
+        """
+        Returns compression stats
+        :param table: hypertable name
+        :returns: tuple like (MBytes before, MBytes after, compression ratio)
+        """
+        df = self.db.dataframe_from_query(f"SELECT * FROM hypertable_compression_stats('{table}');")
+        bytes_before = df["before_compression_total_bytes"].values[0]/1e6
+        bytes_after = df["after_compression_total_bytes"].values[0]/1e6
+        ratio = bytes_before/bytes_after
+        return (round(bytes_before,2), round(bytes_after,2), round(ratio, 2))
+
 
 
 if __name__ == "__main__":
