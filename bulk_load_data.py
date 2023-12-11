@@ -22,7 +22,6 @@ if __name__ == "__main__":
     argparser.add_argument("sensor_id", help="Sensor ID", type=str)
     argparser.add_argument("-a", "--average", help="Averaged data (period must be specified)", type=str, default="")
     argparser.add_argument("-p", "--profile", help="Profile data", action="store_true")
-
     args = argparser.parse_args()
     
     with open(args.secrets) as f:
@@ -34,11 +33,12 @@ if __name__ == "__main__":
     url = secrets["sensorthings"]["url"]
 
     if args.profile:
-        data_type = "profile"
+        data_type = "profiles"
     elif args.average:
         data_type = "average"
     else:
         data_type = "timeseries"
+
     bulk_load_data(args.file, psql_conf, mc, url, args.sensor_id, data_type, average=args.average)
 
 

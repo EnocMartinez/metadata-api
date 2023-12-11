@@ -46,7 +46,7 @@ __data_types__ = {
     "enum": [
         # time-series
         "timeseries",  # fix-point timeseries
-        "profile",  # depth-dependant timeseries. Depth is usually stored as integer to simplify indexing
+        "profiles",  # depth-dependant timeseries. Depth is usually stored as integer to simplify indexing
         # others
         "files",  # arbitrary file-based data, such as audio, pictures or video.
         "detections"  # event detections based from other data. An example is fish detections from a picture

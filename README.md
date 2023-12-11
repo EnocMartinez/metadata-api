@@ -23,7 +23,7 @@ This API is heavily influenced by the SensorThings API, but has some major diffe
 | MMAPI          | SensorThings                         |
 |----------------|--------------------------------------|
 | #id            | name                                 |
-| descrpition    | descritpion                          |
+| description    | description                          |
 | instrumentType | properties:instrumentType            |
 | model          | properties:model                     |
 | variables      | NOT mapped (included as datastreams) |
@@ -44,6 +44,10 @@ Trajectory data is stored as regular timeseries data, where the latitude, longit
 Every sensor may have a set of "processes" associated. Currently, the associated processes are:
 * **Averaging**: average raw data over a certain period of time. This data will be stored in "OBSERVATIONS".
 * **Inference**: Run an inference to the observation (e.g. run an object detection AI job). The data will be stored as parameters in "OBSERVATIONS". The individual detections may also be stored as separated timeseries in "OBSERVATIONS".
+
+
+### Features Of Interest ###
+Features Of Interest (FOIs) are matched to Stations (Things). So every station must have one FOI with the same name.
 
 ### Contact info ###
 

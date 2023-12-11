@@ -262,12 +262,12 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
                 ds.register(url, update=update)
 
-            elif var["dataType"] == "profile":  # creating profile data
+            elif var["dataType"] == "profiles":  # creating profile data
                 ds_name = f"{station}:{sensor_name}:{varname}:full_data"
                 units_doc = mc.get_document("units", units)
                 ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
                 properties = {
-                    "dataType": "profile",
+                    "dataType": "profiles",
                     "fullData": True
                 }
                 if "@qualityControl" in var.keys():
@@ -289,13 +289,13 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                     units = var["@units"]
                     data_type = var["dataType"]
                     obs_prop_id = obs_props_ids[varname]
-                    if var["dataType"] == "timeseries" or var["dataType"] == "profile":  # creating raw_data timeseries
+                    if var["dataType"] == "timeseries" or var["dataType"] == "profiles":  # creating raw_data timeseries
                         ds_name = f"{station}:{sensor_name}:{varname}:{period}_average"
-                        ds_full_data_name = f"{station}:{sensor_name}:{varname}:{period}full_data"
+                        ds_full_data_name = f"{station}:{sensor_name}:{varname}:full_data"
                         units_doc = mc.get_document("units", units)
                         ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
                         properties = {
-                            "fullSensorData": False,
+                            "fullData": False,
                             "dataType": data_type,
                             "averagePeriod": period,
                             "averageFrom": ds_full_data_name
@@ -336,7 +336,7 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         rich.print("[green]start data bulk load")
         db.inject_to_timeseries(df, datastreams)
 
-    elif data_type == "profile" and average:
+    elif data_type == "profiles" and average:
         rich.print(f"[purple]====> profile with average {sensor_name} <=======")
 
         station_name = list(datastreams.keys())[0].split(":")[0]
@@ -348,7 +348,7 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         rich.print(datastreams)
         db.inject_to_observations(df, datastreams, url, foi_id, average, profile=True)
 
-    elif data_type == "profile":
+    elif data_type == "profiles":
         rich.print(f"[purple]====> profile  {sensor_name} <=======")
         datastreams = {key: value for key, value in datastreams.items() if key.endswith("full_data")}
         datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
