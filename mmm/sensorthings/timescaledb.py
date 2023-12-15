@@ -138,11 +138,13 @@ class TimescaleDb:
         :returns: tuple like (MBytes before, MBytes after, compression ratio)
         """
         df = self.db.dataframe_from_query(f"SELECT * FROM hypertable_compression_stats('{table}');")
-        bytes_before = df["before_compression_total_bytes"].values[0]/1e6
-        bytes_after = df["after_compression_total_bytes"].values[0]/1e6
-        ratio = bytes_before/bytes_after
-        return (round(bytes_before,2), round(bytes_after,2), round(ratio, 2))
-
+        bytes_before = df["before_compression_total_bytes"].values[0]
+        bytes_after = df["after_compression_total_bytes"].values[0]
+        if type(bytes_after) is type(None):
+            return 0, 0, 0
+        else:
+            ratio = bytes_before/bytes_after
+            return round(bytes_before/1e6,2), round(bytes_after/1e6,2), round(ratio, 2)
 
 
 if __name__ == "__main__":

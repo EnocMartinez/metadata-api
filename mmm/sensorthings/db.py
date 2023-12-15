@@ -23,7 +23,7 @@ from rich.progress import Progress
 
 from mmm.sensorthings.api import sensorthings_post, sensorthings_get
 from mmm.sensorthings.timescaledb import TimescaleDb
-from mmm.data_maniuplation import slice_dataframes
+from mmm.data_manipulation import slice_dataframes
 from mmm.parallelism import multiprocess
 
 
@@ -131,54 +131,6 @@ class SensorThingsDbConnector(object):
         date = df["timestamp"][0]
         date += pd.to_timedelta("10s")
         return date.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    def post_via_api(self, df, url, row, column_mapper, avg_period=""):
-        """
-        Posts one row from a df via SensorThings API
-        :param df:
-        :param url:
-        :param row:
-        :param column_mapper:
-        """
-        for col in df.columns:
-            if col.endswith("_qc") or col not in column_mapper.keys():
-                continue
-
-            if np.isnan(row[col]):
-                rich.print(f"[red]Got NaN value for variable {col}")
-                continue
-
-            datastream_id = column_mapper[col]
-            timestamp = row.name.strftime('%Y-%m-%dT%H:%M:%SZ')  # format datetime to string
-            obs = check_if_inserted_api(url, datastream_id, timestamp)
-            if obs:  # observation exists
-                rich.print("[yellow]%s with timestamp %s inserted!" % (col, timestamp))
-            else:  # observation does not exist
-
-                if col + "_qc" in df.columns:
-                    # Get the qc flag
-                    qc_flag = row[col + "_qc"]
-                else:
-                    # set as test not passed
-                    qc_flag = 2
-                data = {
-                    "phenomenonTime": timestamp,
-                    "resultTime": timestamp,
-                    "result": row[col],
-                    "resultQuality": {
-                        "qc_flag": int(qc_flag)
-                    }
-                }
-                if avg_period:
-                    end_timestamp = row.name + pd.to_timedelta(avg_period)
-                    end_time_str = end_timestamp.strftime('%Y-%m-%dT%H:%M:%SZ')
-                    data["phenomenonTime"] = f"{timestamp}/{end_time_str}"
-
-                if col + "_std" in df.columns and not np.isnan(row[col + "_std"]):
-                    data["resultQuality"]["stdev"] = row[col + "_std"]
-
-                endpoint = "Datastreams(%d)" % datastream_id + "/Observations"
-                sensorthings_post(url, data, endpoint)
 
     def get_last_observation_id(self):
         """
@@ -626,14 +578,10 @@ class SensorThingsDbConnector(object):
         """
         Injects all data in a dataframe using SQL copy.
         """
-
         init = time.time()
         os.makedirs(tmp_folder, exist_ok=True)
         os.chown(tmp_folder, os.getuid(), os.getgid())
         rich.print("POSTing the first row to get the Feature ID")
-        self.post_via_api(df, url, df.iloc[0], datastreams, avg_period=avg_period)
-        last_row = df.iloc[-1]  # first row inserted via API
-        df = df.iloc[1:-1]  # first row inserted via API
 
         rich.print("Splitting input dataframe into smaller ones")
         rows = int(max_rows / len(datastreams))
@@ -656,9 +604,6 @@ class SensorThingsDbConnector(object):
 
         rich.print("Forcing PostgreSQL to update Observation ID...")
         self.exec_query("select setval('\"OBSERVATIONS_ID_seq\"', (select max(\"ID\") from \"OBSERVATIONS\") );")
-
-        self.post_via_api(df, url, last_row, datastreams, avg_period=avg_period)
-        rich.print("[magenta]Inserting all via SQL COPY took %.02f seconds" % (time.time() - init))
 
         with Progress() as progress:
             task1 = progress.add_task("remove temp files...", total=len(dataframes))
