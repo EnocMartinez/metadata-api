@@ -13,7 +13,7 @@ import os
 from mmm import MetadataCollector, CkanClient
 import rich
 
-from mmm.data_maniuplation import open_csv, drop_duplicated_indexes
+from mmm.data_manipulation import open_csv, drop_duplicated_indexes
 from mmm.sensorthings.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream
 from mmm.sensorthings.db import SensorThingsDbConnector
 import pandas as pd

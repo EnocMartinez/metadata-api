@@ -11,6 +11,7 @@ created: 30/11/22
 import pandas as pd
 
 from .common import run_subprocess
+from .data_manipulation import open_csv
 from .metadata_collector import MetadataCollector
 from .data_sources.sensorthings import SensorthingsDbConnector
 import rich
@@ -28,7 +29,8 @@ class DataCollector:
         # Define datasources
         self.sta = sta
 
-    def generate(self, dataset_id: str, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder: str) -> str:
+    def generate(self, dataset_id: str, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder: str,
+                 csv_file: str="") -> str:
         """
         Generates a dataset based on its configuration stored in MongoDB
         :param dataset_id: #id of the dataset
@@ -37,15 +39,21 @@ class DataCollector:
         """
         os.makedirs(out_folder, exist_ok=True)
         conf = self.mc.get_document("datasets", dataset_id)
-        if conf["dataSource"] == "sensorthingsdb":
+
+        if csv_file:
+            return self.netcdf_from_csv(conf, out_folder, csv_file)
+
+        if conf["dataSource"] in ["sensorthingsdb", "sensorthings-tsdb"]:
             dataset = self.netcdf_from_sta(conf, time_start, time_end, out_folder)
 
         elif conf["dataSource"] == "fileserver":
             dataset = self.zip_from_fileserver(conf, time_start, time_end, out_folder)
         else:
-            raise ValueError(f"data_source='{conf['data_source']}' not implemented")
+            rich.print(f"[yellow]WARNING! data_source='{conf['dataSource']}' not implemented")
 
-        if "export" in conf.keys():
+        if csv_file:
+            pass
+        elif "export" in conf.keys():
             host = conf["export"]["host"]
             path = conf["export"]["path"]
             path = os.path.join(path, dataset_id)
@@ -56,7 +64,47 @@ class DataCollector:
             rich.print(f"[yellow]WARNING! dataset {dataset_id} doesn't have export options!")
         return dataset
 
-    def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder):
+    def netcdf_from_csv(self, conf, out_folder, csv_file):
+        df = open_csv(csv_file, format=True)
+        rich.print(df)
+        time_start = pd.Timestamp(df.index.values[0])
+        time_end = pd.Timestamp(df.index.values[-1])
+        rich.print("[purple]Generating NetCDF from a CSV file")
+
+        filename = conf["#id"] + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".nc"
+        filename = os.path.join(out_folder, filename)
+
+        station = self.mc.get_document("stations", conf["@stations"])
+        variables = []  # by default all variables will be used
+        if "@variables" in conf.keys():
+            variables = conf["@variables"]
+
+        options = conf["dataSourceOptions"]
+        dataframes = []
+        metadata = []
+
+        for sensor_id in conf["@sensors"]:
+            sensor = self.mc.get_document("sensors", sensor_id)
+            rich.print(f"Getting data for sensor '{sensor_id}' from '{time_start}' to '{time_end}'...")
+
+            m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
+            dataframes.append(df)
+            metadata.append(m)
+
+        df = open_csv(csv_file)
+        dataframes = [df]
+        if len(conf["@sensors"]) != 1:
+            # create dummy csv files with just the header for the metadata harmonizer
+            dummydata = {"timestamp": [], "depth": []}
+            for v in df.columns:
+                dummydata[v] = []
+            dummydf = pd.DataFrame(dummydata)
+            dataframes.append(dummydf)
+            rich.print(dummydf)
+
+        call_generator(dataframes, metadata, output=filename)
+
+    def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder, csv_file=""):
         """
         Generates a NetCDF file from a SensorThings Database
         :param conf:
@@ -84,6 +132,7 @@ class DataCollector:
             m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
             dataframes.append(df)
             metadata.append(m)
+
         call_generator(dataframes, metadata, output=filename)
         return filename
 
@@ -146,18 +195,27 @@ class DataCollector:
         # Create dictionary where var_id is the key and the value is the units doc
         units = {}
         for var_id in variable_ids:
+            rich.print(f"[yellow]looking for {var_id}...")
+            found = False
             for var in sensor["variables"]:
                 if var["@variables"] == var_id:
+                    rich.print(f"[cyan]processing {var_id}")
                     units[var_id] = self.mc.get_document("units", var["@units"])
+                    found = True
+            if not found:
+                raise LookupError(f"variable {var_id} not found in sensor {sensor['#id']}!")
 
         var_metadata = {}
+        rich.print(units)
         for variable in variables:
+            rich.print(variable)
             var_id = variable["#id"]
             var_metadata[var_id] = {
                 "*long_name": variable["description"],
                 "*sdn_parameter_uri": variable["definition"],
                 "~sdn_uom_uri": units[var_id]["definition"],
-                "~standard_name": variable["standard_name"]
+                "~standard_name": variable["standard_name"],
+                "~standard_name_uri": variable["standard_name"]
             }
 
         sensor_metadata = {
@@ -215,4 +273,3 @@ def call_generator(dataframes, metadata, output="output.nc", generator_path="../
     [os.remove(f) for f in csv_files]
     [os.remove(f) for f in meta_files]
     rich.print("[green]ok!")
-

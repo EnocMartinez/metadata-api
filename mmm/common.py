@@ -162,6 +162,7 @@ def normalize_string(instring, lower_case=False):
         outstring = outstring.lower()
     return outstring
 
+
 def dataframe_to_dict(df, key, value):
     """
     Takes two columns of a dataframe and converts it to a dictionary
@@ -188,12 +189,13 @@ def reverse_dictionary(data):
     return {value: key for key, value in data.items()}
 
 
-def run_subprocess(cmd: str, fail_exit=False):
+def run_subprocess(cmd, fail_exit=False):
     """
     Runs a command as a subprocess. If the process retunrs 0 returns True. Otherwise prints stderr and stdout and returns False
-    :param cmd: command
+    :param cmd: command (list or string)
     :return: True/False
     """
+    assert (type(cmd) is list or type(cmd) is str)
     if type(cmd) == list:
         cmd_list = cmd
     else:

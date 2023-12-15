@@ -15,6 +15,7 @@ from rich.progress import Progress
 from mmm.common import qc_flags
 import numpy as np
 import time
+import gc
 
 
 def open_csv(csv_file, time_format="%Y-%m-%d %H:%M:%S", time_range=[], format=False) -> pd.DataFrame:
@@ -106,7 +107,7 @@ def resample_dataframe(df, average_period="30min", std_column=True, log_vars=[],
     segments with only one value will be ignored (no std can be computed).
     :param df: input dataframe
     :param average_period: average period (e.g. 1h, 15 min, etc.)
-    :param std_colum: if True creates a columns with the standard deviation for each variable
+    :param std_column: if True creates a columns with the standard deviation for each variable
     :return: averaged dataframe
     """
     df = df.copy()
