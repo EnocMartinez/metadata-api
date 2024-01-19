@@ -104,7 +104,7 @@ def get_by_id(collection: str, identifier: str):
     return Response(json.dumps(document), status=200, mimetype="application/json")
 
 
-@app.route('/v1.0/schema/<path:collection>', methods=['GET'])
+@app.route('/v1.0/schemas/<path:collection>', methods=['GET'])
 def get_schema(collection: str):
     if collection not in mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
@@ -113,6 +113,37 @@ def get_schema(collection: str):
 
     schema = mmm_schemas[collection]
     return Response(json.dumps(schema), status=200, mimetype="application/json")
+
+
+@app.route('/v1.0/<path:collection>/<path:identifier>/history', methods=['GET'])
+def get_document_history(collection: str, identifier: str):
+    if collection not in mc.collection_names:
+        error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
+        json_error = {"error": True, "code": 400,  "message": error_msg}
+        return Response(json.dumps(json_error), status=400, mimetype="application/json")
+    try:
+        documents = mc.get_document_history(collection, identifier)
+    except LookupError:
+        error_msg = f"Document with #id={identifier} does not exist in collection '{collection}', use PUT instead"
+        json_error = {"error": True, "code": 400,  "message": error_msg}
+        return Response(json.dumps(json_error), status=404, mimetype="application/json")
+    return Response(json.dumps(documents), status=200, mimetype="application/json")
+
+
+@app.route('/v1.0/<path:collection>/<path:identifier>/history/<path:version>', methods=['GET'])
+def get_history_by_id(collection: str, identifier: str, version: int):
+    if collection not in mc.collection_names:
+        error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
+        json_error = {"error": True, "code": 400,  "message": error_msg}
+        return Response(json.dumps(json_error), status=400, mimetype="application/json")
+    try:
+        document = mc.get_document(collection, identifier, version=version)
+    except LookupError:
+        error_msg = f"Document with #id={identifier} does not exist in collection '{collection}', use PUT instead"
+        json_error = {"error": True, "code": 400,  "message": error_msg}
+        return Response(json.dumps(json_error), status=404, mimetype="application/json")
+
+    return Response(json.dumps(document), status=200, mimetype="application/json")
 
 
 if __name__ == "__main__":
