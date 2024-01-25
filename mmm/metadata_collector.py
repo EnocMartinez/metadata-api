@@ -141,7 +141,10 @@ class MetadataCollector:
         """
         errors = []
         errors = validate_schema(doc, mmm_metadata, errors=errors)
-        errors = validate_schema(doc, mmm_schemas[collection], errors=errors)
+        if collection not in mmm_schemas.keys():
+            rich.print(f"[yellow]WARNING: no schema for '{collection}'")
+        else:
+            errors = validate_schema(doc, mmm_schemas[collection], errors=errors)
         if errors:
             for e in errors:
                 rich.print(f"[red]ERROR: {e}")
@@ -230,12 +233,14 @@ class MetadataCollector:
             return True
         return False
 
-    def get_document(self, collection: str, document_id: str, version=None):
+    def get_document(self, collection: str, document_id: str, version:int=0):
         """
-        Gets a single document from a collection
-        :param document_id:
-        :param collection:
-        :return:
+        Gets a single document from a collection. If version is used a specific version in the historical database
+        will be fetched
+
+        :param collection: name of the collection
+        :param document_id: id of the document
+        :param version: version (int)
         """
         if version:
             db = self.db_history
@@ -247,11 +252,11 @@ class MetadataCollector:
             raise LookupError(f"Collection {collection} not found!")
 
         db_collection = db[collection]
-        filter = {"#id": document_id}
+        mongo_filter = {"#id": document_id}
         if version:
-            filter["#version"] = version
-
-        cursor = db_collection.find(filter)
+            mongo_filter["#version"] = int(version)
+        rich.print(mongo_filter)
+        cursor = db_collection.find(mongo_filter)
 
         documents = [document for document in cursor]  # convert cursor to list
         n = len(documents)
@@ -261,6 +266,20 @@ class MetadataCollector:
             raise LookupError(f"Element {collection} with  filter {json.dumps(filter)} not found")
 
         return strip_mongo_ids(documents[0])
+
+    def get_document_history(self, collection, document_id):
+        """
+        Looks for all versions of a document in the history database and returns them all.
+        """
+        db = self.db_history
+        db_collection = db[collection]
+        filter = {"#id": document_id}
+        cursor = db_collection.find(filter)
+        documents = [strip_mongo_ids(document) for document in cursor]  # convert cursor to list
+        if len(documents) == 0:
+            raise LookupError(f"Element {collection} with  filter {json.dumps(filter)} not found")
+
+        return documents
 
     def replace_document(self, collection: str,  document_id: str, document: dict, force=False):
         """
