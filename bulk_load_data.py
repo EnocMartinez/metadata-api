@@ -10,6 +10,7 @@ created: 21/09/2023
 """
 from argparse import ArgumentParser
 from mmm import MetadataCollector, CkanClient, propagate_mongodb_to_sensorthings
+from mmm.metadata_collector import init_metadata_collector
 from mmm.sensorthings.db import SensorThingsDbConnector
 import yaml
 
@@ -27,7 +28,7 @@ if __name__ == "__main__":
     with open(args.secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
 
-    mc = MetadataCollector(secrets["mongodb"]["connection"], secrets["mongodb"]["database"])
+    mc = init_metadata_collector(secrets)
 
     psql_conf = load_fields_from_dict(secrets["sensorthings"], ["database", "user", "host", "port", "password"])
     url = secrets["sensorthings"]["url"]

@@ -12,7 +12,7 @@ from argparse import ArgumentParser
 import yaml
 
 import mmm.schemas
-from mmm.metadata_collector import MetadataCollector
+from mmm.metadata_collector import MetadataCollector, init_metadata_collector
 from mmm.common import setup_log, file_list
 import json
 import rich
@@ -71,7 +71,7 @@ if __name__ == "__main__":
     with open(args.secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
 
-    mc = MetadataCollector(secrets["mongodb"]["connection"], secrets["mongodb"]["database"])
+    mc = init_metadata_collector(secrets)
 
     old = args.old
     new = args.new

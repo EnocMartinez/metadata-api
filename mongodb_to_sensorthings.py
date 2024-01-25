@@ -11,7 +11,7 @@ created: 21/09/2023
 from argparse import ArgumentParser
 from mmm import MetadataCollector, CkanClient, propagate_mongodb_to_sensorthings
 import yaml
-
+from mmm.metadata_collector import init_metadata_collector
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
@@ -23,6 +23,7 @@ if __name__ == "__main__":
     with open(args.secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
     collections = args.collections.split(",")
-    mc = MetadataCollector(secrets["mongodb"]["connection"], secrets["mongodb"]["database"])
+    mc = init_metadata_collector(secrets)
+
     url = secrets["sensorthings"]["url"]
     propagate_mongodb_to_sensorthings(mc, collections, url)

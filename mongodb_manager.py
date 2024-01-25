@@ -10,7 +10,7 @@ license: MIT
 created: 21/09/2023
 """
 from argparse import ArgumentParser, ArgumentError
-from mmm.metadata_collector import MetadataCollector, strip_mongo_ids
+from mmm.metadata_collector import MetadataCollector, strip_mongo_ids, init_metadata_collector
 import yaml
 import rich
 import os
@@ -184,7 +184,7 @@ if __name__ == "__main__":
     folder = os.path.join(args.folder, db_name)
     folder_hist = os.path.join(args.folder, db_name_hist)
 
-    mc = MetadataCollector(secrets["mongodb"]["connection"], secrets["mongodb"]["database"])
+    mc = init_metadata_collector(secrets)
 
     collections = mc.collection_names
     if args.collections:

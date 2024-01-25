@@ -27,25 +27,16 @@ def get_timestamp_string():
     return now
 
 
-def init_metadata_collector(secrets: dict):
-    """
-    Wrapper that Inits a MetadataCollectino object from a secrets dict
-    :param secrets:
-    :return: MetadataCollector
-    """
-    return MetadataCollector(secrets["MetadataCollector"]["database"])
-
-
 def strip_mongo_ids(doc: list or dict):
     """
     Strip _id elements from JSON structures
     :param doc: MongoDB document, can be a list a dict or a list of dicts
     :return: dict or list of dicts depending on input
     """
-    if type(doc) == dict:
+    if type(doc) is dict:
         if "_id" in doc.keys():
             doc.pop("_id")  # remove _id
-    elif type(doc) == list:
+    elif type(doc) is list:
         for d in doc:
             if "_id" in d.keys():
                 d.pop("_id")  # remove _id
@@ -57,7 +48,7 @@ def strip_mongo_ids(doc: list or dict):
 def validate_key(data, key, key_type, errortype=SyntaxError):
     if key not in data.keys():
         raise errortype(f"Required key {key} not found")
-    elif type(data[key]) != key_type:
+    elif type(data[key]) is not key_type:
         raise errortype(f"Expected type of {key}  is {key_type}, got {type(data[key])}")
 
 
@@ -84,7 +75,7 @@ class MetadataCollector:
         Initializes a connection to a MongoDB databse hosting metadata
         :param connection: connection string
         :param database_name: database name
-        :param dbname: name of the
+        :param ensure_ids: make sure that all elements have a unique #id
         """
         self.__connection_chain = connection
         self.__connection = MongoClient(connection)
@@ -135,7 +126,9 @@ class MetadataCollector:
             #version: (int) version of the document
             #creationDate: (string) date of the first version of the document
             #modificationDate: (string) date with the latest version
-        :param document: JSON dict with document data
+        :param doc: JSON dict with document data
+        :param collection: collection name
+        :param exception: Wether to throw and exception on error or not
         :return: Nothing
         :raise: SyntaxError
         """
@@ -156,10 +149,10 @@ class MetadataCollector:
             return True  # document is valid
 
     @staticmethod
-    def strip_metadata_fields(doc):
+    def strip_metadata_fields(doc: dict) -> dict:
         """
         Takes a document and strips all metadata (id, version, author...)
-        :param document:
+        :param doc: dict
         :return: cleaned document
         """
         return {key: value for key, value in doc.items() if not key.startswith("#")}
@@ -173,12 +166,16 @@ class MetadataCollector:
         documents = self.get_documents(collection, history=False)
         return [d["#id"] for d in documents]
 
-    def get_documents(self, collection: str, filter={}, history=False, strip=True) -> list:
+    def get_documents(self, collection: str, mongo_filter=None, history=False) -> list:
         """
         Return all documents in a collection
-        :param collection:
-        :return:
+        :param collection: collectio name
+        :param mongo_filter: filters to apply to the query
+        :param history: search in archived documents
+        :return: list of documents that match the criteria
         """
+        if mongo_filter is None:
+            mongo_filter = {}
         if history:
             db = self.db_history
         else:
@@ -188,16 +185,19 @@ class MetadataCollector:
             raise LookupError(f"Collection {collection} not found!")
 
         db_collection = db[collection]
-        cursor = db_collection.find(filter)
+        cursor = db_collection.find(mongo_filter)
         documents = [document for document in cursor]  # convert cursor to list
         return strip_mongo_ids(documents)
 
     # --------- Document Operations --------- #
-    def insert_document(self, collection: str, document: dict, author="enoc_martinez", force=False, force_meta=False):
+    def insert_document(self, collection: str, document: dict, author: str, force=False, force_meta=False):
         """
         Adds metadata to a document and then inserts it to a collection.
-        :param collection:
-        :param document:
+        :param collection: collection name
+        :param document: json doc to be inserted
+        :param author: people #id of the author
+        :param force: insert even if the document fails the validation
+        :param force_meta: insert the document metadata as is (by default new metadata is generated)
         :return: document with metadata
         """
         # first check that the doc's #id is not already registered
@@ -220,7 +220,7 @@ class MetadataCollector:
             }
             contents = {key: value for key, value in document.items() if not key.startswith("#")}
             new_document.update(contents)
-        else: # force input metadata
+        else:  # force input metadata
             new_document = document
 
         self.validate_document(new_document, collection, exception=(not force))
@@ -322,7 +322,6 @@ class MetadataCollector:
         drops an element in collection
         :param document_id: #id
         :param collection: collection name
-        :param update: elements to update
         """
         db_collection = self.db[collection]
         db_collection.delete_one({"#id": document_id})
@@ -438,7 +437,6 @@ class MetadataCollector:
                 return self.get_organization(contact["@organizations"])
         raise LookupError(f"Organizations with role {role} not found")
 
-
     def reset_version_history(self):
         """
         USE WITH CAUTION! This method will
@@ -450,7 +448,7 @@ class MetadataCollector:
         self.__connection.drop_database(self.db_history)
         self.db_history = self.__connection[self.history_database_name]
         for col in self.collection_names:
-            self.db_history[col]  # Create collection
+            _ = self.db_history[col]  # Create collection
             docs = self.get_documents(col)
             for doc in docs:
                 if doc["#version"] != 1:
@@ -458,7 +456,6 @@ class MetadataCollector:
                     # Modify directly through pymongo
                     self.db[col].replace_one({"#id": doc['#id']}, doc.copy())
                 self.db_history[col].insert_one(doc)
-
 
     def get_contact_by_role(self, doc: dict, role: str) -> {dict, str}:
         """
@@ -483,7 +480,6 @@ class MetadataCollector:
                     raise ValueError("Contact type not valid!")
         raise LookupError(f"Contact with role '{role}' not found in document '{doc['#id']}'")
 
-
     def get_funding_projects(self, sensors: list, tstart:str = "", tend:str=""):
         """
         Get the names of the projects that funded the operations over a list of sensors
@@ -492,10 +488,10 @@ class MetadataCollector:
         :param tend:
         :return:
         """
-        if type(sensors) == str:
+        if type(sensors) is str:
             sensors = [sensors]
         activities = {}
-        assert(type(sensors) == list)
+        assert(type(sensors) is list)
         for sensor in sensors:
             for act in self.get_documents("activities"):
                 if "@sensors" in act["appliedTo"].keys():
@@ -525,7 +521,6 @@ class MetadataCollector:
 
         rich.print(projects)
 
-
     def __check_link(self, parent_collection: str, parent_doc_id: str, target_collection: str, target_doc: str,
                      errors: list) -> list:
         """
@@ -538,7 +533,6 @@ class MetadataCollector:
         :param errors: list with all errors as string
         :return: error list with new errors
         """
-
         try:
             d = self.get_document(target_collection, target_doc)
             if not d:
@@ -579,12 +573,14 @@ class MetadataCollector:
                         errors = self.__check_dict(collection, doc_id, subvalue, errors)
         return errors
 
-    def healthcheck(self, collections=[]):
+    def healthcheck(self, collections=None):
         """
         Ensure all relations in the database. For every document validate it against the generic schema (metadata
         schema), collection schema and scan the document for broken relation (@-fields).
         """
-        assert(type(collections) == list)
+        if collections is None:
+            collections = []
+        assert(type(collections) is list)
         rich.print("[cyan] ==> Ensuring all relations in MongoDB database <==")
         errors = []
         if not collections:
