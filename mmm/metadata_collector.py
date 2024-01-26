@@ -15,6 +15,8 @@ import rich
 import json
 import jsonschema
 import pandas as pd
+import os
+
 try:
     from mmm.schemas import mmm_schemas, mmm_metadata
 except ImportError:
@@ -63,33 +65,79 @@ def validate_schema(doc: dict, schema: dict, errors: list, verbose=False) -> lis
         jsonschema.validate(doc, schema=schema)
     except jsonschema.ValidationError as e:
         txt = f"[red]Document='{doc['#id']}' not valid for schema '{schema['$id']}'[/red]. Cause: {e.message}"
-        errors .append(txt)
+        errors.append(txt)
         if verbose:
             rich.print(txt)
     return errors
 
 
+def init_metadata_collector(secrets: dict):
+    """
+    Initializes a Metadata Collector object from secrets file
+    :param secrets: dict object from the secrets yaml file
+    :returns: MetadataCollector object
+    """
+    assert "mmapi" in secrets.keys(), "mmapi key not found!"
+    __required_keys = [
+        "connection",
+        "database",
+        "default_author",
+        "organization"
+    ]
+    for key in __required_keys:
+        assert key in secrets["mmapi"].keys(), f"key '{key}' not found in secrets[\"mmapi\"]"
+
+    return MetadataCollector(secrets["mmapi"]["connection"],
+                             secrets["mmapi"]["database"],
+                             secrets["mmapi"]["default_author"],
+                             secrets["mmapi"]["organization"])
+
+
+def init_metadata_collector_env():
+    """
+    Initializes a Metadata Collector object from environment variables
+    :returns: MetadataCollector object
+    """
+    __required_keys = [
+        "mmapi_connection",
+        "mmapi_database",
+        "mmapi_default_author",
+        "mmapi_organization"
+    ]
+    for key in __required_keys:
+        assert key in os.environ.keys(), f"key '{key}' not environment variables"
+
+    return MetadataCollector(os.environ["mmapi_connection"],
+                             os.environ["mmapi_database"],
+                             os.environ["mmapi_default_author"],
+                             os.environ["mmapi_organization"])
+
+
 class MetadataCollector:
-    def __init__(self, connection: str, database_name: str, ensure_ids=True):
+    def __init__(self, connection: str, database_name: str, default_author: str, organization: str, ensure_ids=True):
         """
-        Initializes a connection to a MongoDB databse hosting metadata
+        Initializes a connection to a MongoDB database hosting metadata
         :param connection: connection string
         :param database_name: database name
+        :param default_author: default author (must be a people #id)
+        :param organization: organization that owns the infrastructure (must be an organizations #id)
         :param ensure_ids: make sure that all elements have a unique #id
         """
+        self.default_author = default_author
+        self.organization = organization
         self.__connection_chain = connection
-        self.__connection = MongoClient(connection)
+        self.__connection = MongoClient(connection, serverSelectionTimeoutMS=2000)
         self.database_name = database_name
         self.history_database_name = database_name + "_hist"
         self.db = self.__connection[self.database_name]  # database with latest data
-        self.db_history = self.__connection[self.history_database_name] # database with all archived versions
+        self.db_history = self.__connection[self.history_database_name]  # database with all archived versions
         # To create new collections, add them here
         self.collection_names = ["sensors", "stations", "variables", "qualityControl", "people", "units",
                                  "organizations", "datasets", "operations", "activities", "projects", "resources"]
         if ensure_ids:
             self.__ensure_ids()  # make sure that all elements have a unique #id
 
-        self.metadata_schema = mmm_metadata   # JSON schema for
+        self.metadata_schema = mmm_metadata  # JSON schema for
         self.schemas = mmm_schemas
 
     def __ensure_ids(self):
@@ -190,23 +238,31 @@ class MetadataCollector:
         return strip_mongo_ids(documents)
 
     # --------- Document Operations --------- #
-    def insert_document(self, collection: str, document: dict, author: str, force=False, force_meta=False):
+    def insert_document(self, collection: str, document: dict, author: str = "", force=False, force_meta=False,
+                        update=False):
         """
         Adds metadata to a document and then inserts it to a collection.
         :param collection: collection name
         :param document: json doc to be inserted
-        :param author: people #id of the author
+        :param author: people #id of the author (if not set the default author will be set)
         :param force: insert even if the document fails the validation
         :param force_meta: insert the document metadata as is (by default new metadata is generated)
+        :param update: if set update the document if a previous version existed
         :return: document with metadata
         """
         # first check that the doc's #id is not already registered
+
+        if not author:
+            author = self.default_author
 
         if collection not in self.collection_names:
             self.collection_names.append(collection)
 
         if document["#id"] in self.get_identifiers(collection):
-            raise NameError(f"{collection} document with id {document['#id']} already exists!")
+            if update:
+                return self.replace_document(collection, document["#id"], document, force=force)
+            else:
+                raise NameError(f"{collection} document with id {document['#id']} already exists!")
 
         if not force_meta:  # By default generate the metadata
             now = get_timestamp_string()
@@ -233,7 +289,7 @@ class MetadataCollector:
             return True
         return False
 
-    def get_document(self, collection: str, document_id: str, version:int=0):
+    def get_document(self, collection: str, document_id: str, version: int = 0):
         """
         Gets a single document from a collection. If version is used a specific version in the historical database
         will be fetched
@@ -255,7 +311,6 @@ class MetadataCollector:
         mongo_filter = {"#id": document_id}
         if version:
             mongo_filter["#version"] = int(version)
-        rich.print(mongo_filter)
         cursor = db_collection.find(mongo_filter)
 
         documents = [document for document in cursor]  # convert cursor to list
@@ -281,25 +336,29 @@ class MetadataCollector:
 
         return documents
 
-    def replace_document(self, collection: str,  document_id: str, document: dict, force=False):
+    def replace_document(self, collection: str, document_id: str, document: dict, author=False, force=False):
         """
         Takes a document in the database, updates the metadata and adds new info. Metadata (#version, #modificationDate,
         etc.) are modified automatically. All other fields are replaced by the fields in the input document.
         :param document_id: #id
         :param collection: collection name
         :param document: elements to update
+        :param author: author of the document
         :param force: If true, ignore metadata checks and insert document
         """
 
         if document["#id"] != document_id:
             raise ValueError("Document #id does not match with parameter id")
 
+        if not author:
+            author = self.default_author
+
         old_document = self.get_document(collection, document_id)  # getting old metadata
         metadata = {key: value for key, value in old_document.items() if key.startswith("#")}
         old_contents = {key: value for key, value in old_document.items() if not key.startswith("#")}
         metadata["#version"] += 1
         metadata["#modificationDate"] = get_timestamp_string()
-        metadata["#author"] = document["#author"]  # update author
+        metadata["#author"] = author  # update author
 
         # keep only elements that are not metadata
         contents = {key: value for key, value in document.items() if not key.startswith("#")}
@@ -317,7 +376,7 @@ class MetadataCollector:
         self.db_history[collection].insert_one(new_document.copy())
         return new_document
 
-    def delete_document(self, collection: str,  document_id: str):
+    def delete_document(self, collection: str, document_id: str):
         """
         drops an element in collection
         :param document_id: #id
@@ -400,7 +459,8 @@ class MetadataCollector:
         :return: two lists with same size: [module_list, angle_list]
         """
         variables = self.get_sensor_variables(sensor_id)
-        return [identifier for identifier, var in variables.items() if "logarithmic" in var.keys() and var["logarithmic"]]
+        return [identifier for identifier, var in variables.items() if
+                "logarithmic" in var.keys() and var["logarithmic"]]
 
     def get_no_average_variables(self, sensor_id):
         """
@@ -480,7 +540,7 @@ class MetadataCollector:
                     raise ValueError("Contact type not valid!")
         raise LookupError(f"Contact with role '{role}' not found in document '{doc['#id']}'")
 
-    def get_funding_projects(self, sensors: list, tstart:str = "", tend:str=""):
+    def get_funding_projects(self, sensors: list, tstart: str = "", tend: str = ""):
         """
         Get the names of the projects that funded the operations over a list of sensors
         :param sensors:
@@ -491,7 +551,7 @@ class MetadataCollector:
         if type(sensors) is str:
             sensors = [sensors]
         activities = {}
-        assert(type(sensors) is list)
+        assert (type(sensors) is list)
         for sensor in sensors:
             for act in self.get_documents("activities"):
                 if "@sensors" in act["appliedTo"].keys():
@@ -516,10 +576,10 @@ class MetadataCollector:
                 for act in activities:
                     if act in op["@activities"] and operation_id not in operations:
                         if "@projects" in op.keys():
-                            [projects.append(o) for o in  op["@projects"]]  # append all projects
+                            [projects.append(o) for o in op["@projects"]]  # append all projects
                             projects.append(op["@projects"])
 
-        rich.print(projects)
+
 
     def __check_link(self, parent_collection: str, parent_doc_id: str, target_collection: str, target_doc: str,
                      errors: list) -> list:
@@ -539,7 +599,7 @@ class MetadataCollector:
                 raise ValueError("Never null!")
         except LookupError:
             errors.append(f"{parent_collection}:{parent_doc_id} broken link {target_collection}:{target_doc}")
-        return  errors
+        return errors
 
     def __check_dict(self, collection: str, doc_id: str, doc: dict, errors: list) -> list:
         """
@@ -580,7 +640,7 @@ class MetadataCollector:
         """
         if collections is None:
             collections = []
-        assert(type(collections) is list)
+        assert (type(collections) is list)
         rich.print("[cyan] ==> Ensuring all relations in MongoDB database <==")
         errors = []
         if not collections:
@@ -609,9 +669,4 @@ class MetadataCollector:
             [rich.print(f"  [yellow]{error}") for error in errors]
             rich.print(f"[red]Got {len(errors)} errors!")
         else:
-            rich.print(f"[green]\n=) =) Congratulations! You have a healty database (= (=\n")
-
-
-
-
-
+            rich.print(f"[green]\n=) =) Congratulations! You have a healthy database (= (=\n")

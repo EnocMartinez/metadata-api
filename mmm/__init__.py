@@ -1,4 +1,4 @@
-from .metadata_collector import MetadataCollector
+from .metadata_collector import MetadataCollector, init_metadata_collector_env, init_metadata_collector
 from .data_collector import DataCollector
 from .data_sources.sensorthings import SensorthingsDbConnector
 from .common import setup_log

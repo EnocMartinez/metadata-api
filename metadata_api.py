@@ -8,16 +8,18 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 24/1/23
 """
-
+import datetime
+from dateutil.relativedelta import relativedelta
 from argparse import ArgumentParser
 import yaml
 from flask import Flask, request, Response
 from flask_cors import CORS
-from mmm.metadata_collector import MetadataCollector
+from mmm import MetadataCollector, init_metadata_collector_env, init_metadata_collector
 from mmm.common import setup_log
 from mmm.schemas import mmm_schemas
 import json
 import os
+import rich
 
 app = Flask(__name__)
 CORS(app)
@@ -146,15 +148,68 @@ def get_history_by_id(collection: str, identifier: str, version: int):
     return Response(json.dumps(document), status=200, mimetype="application/json")
 
 
-if __name__ == "__main__":
-    log = setup_log("Metadata API")
-    __required_environment_variables = ["mongodb_connection"]
-    for key in __required_environment_variables:
-        if key not in os.environ.keys():
-            raise EnvironmentError(f"Environment variable '{key}' not set!")
+@app.route('/v1.0/projects_timeline', methods=['GET'])
+def project_timeline():
+    """
+    Returns a time-series (grafana-like format) with all active projects and their respective months number.
+    Only return projects that are european and national and that did not en before the last 4 months
+    """
+    projects = mc.get_documents("projects")
+    # Keep only projects with start and end date
+    projects = [p for p in projects if p["dateStart"] and p["dateEnd"]]
+    resp = []
+    for p in projects:
+        p["start"] = datetime.datetime.strptime(p["dateStart"], "%Y-%m-%d")
+        p["end"] = datetime.datetime.strptime(p["dateEnd"], "%Y-%m-%d")
+        p["count"] = 0
+        # Mark active projects those european or national projects that have an end date less than 4 months ago
+        if p["type"] == "contract" or p["end"] < datetime.datetime.now() + relativedelta(months=4):
+            p["active"] = False
+        else:
+            p["active"] = True
 
-    __mongodb_database = "metadata"
-    mc = MetadataCollector(os.environ["mongodb_connection"], __mongodb_database)
+    rich.print(projects)
+    start = datetime.datetime.strptime("2010-01-01", "%Y-%m-%d")
+    end = datetime.datetime.strptime("2030-01-01", "%Y-%m-%d")
+    ctime = start
+    while ctime <= end:
+        data = {"time": ctime.strftime("%Y-%m-%d %H:%M:%S")}
+        for proj in projects:
+
+            if not proj["active"]:
+                continue
+
+            name = proj["acronym"]
+            if ctime < proj["start"]:
+                pass
+            elif ctime > proj["end"]:
+                pass
+            else:
+                proj["count"] += 1
+                data[name] = proj["count"]
+        resp.append(data)
+        ctime += relativedelta(months=1)
+
+    return Response(json.dumps(resp), status=200, mimetype="application/json")
+
+
+if __name__ == "__main__":
+    argparser = ArgumentParser()
+    argparser.add_argument("-e", "--environment", action="store_true", help="Initialize from environment variables")
+    argparser.add_argument("-s", "--secrets", help="Initialize from secrets yaml file", type=str, default="")
+    args = argparser.parse_args()
+
+    log = setup_log("Metadata API")
+
+    if args.environment:
+        mc = init_metadata_collector_env()
+    elif args.secrets:
+        with open(args.secrets) as f:
+            secrets = yaml.safe_load(f)["secrets"]
+            mc = init_metadata_collector(secrets)
+    else:
+        raise ValueError("Metadata API needs to be configured using environment variables or yaml file!")
+
     log.info("starting Metadata API")
     app.run(host="0.0.0.0", debug=True)
 

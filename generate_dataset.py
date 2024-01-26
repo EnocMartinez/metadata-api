@@ -15,6 +15,9 @@ import yaml
 import rich
 import pandas as pd
 
+from mmm.metadata_collector import init_metadata_collector
+
+
 def calculate_time_intervals(time_start: str, time_end: str, periodicity=""):
     """
     Exports the dataset from the appropriate data source.
@@ -75,7 +78,7 @@ def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder
         staconf = secrets["sensorthings"]
 
     log = setup_log("sta_to_emso")
-    mc = MetadataCollector(secrets["mongodb"]["connection"], secrets["mongodb"]["database"], ensure_ids=False)
+    mc = init_metadata_collector(secrets)
     if not csv_file:
         sta = SensorthingsDbConnector(staconf["host"], staconf["port"], staconf["database"], staconf["user"], staconf["password"], log, timescaledb=True)
     else:

@@ -12,9 +12,9 @@ created: 3/10/23
 """
 
 try:
-    from .metadata_collector import MetadataCollector, init_metadata_collector
+    from .metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
 except ImportError:
-    from metadata_collector import MetadataCollector
+    from metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
 
 import os.path
 from argparse import ArgumentParser
@@ -64,6 +64,8 @@ def get_aei_metadata(project_id: str) -> dict:
 
     for i in range(len(keys)):
         rich.print(f"[cyan] key: '{values[i]}'...", end="")
+        if len(values[i]) == 0:
+            continue
         if values[i][0] == "\"" == values[i][-1]:  # Remove redundant " chars '"hola"' -> 'hola'
             values[i] = values[i][1:-1]
             rich.print(f"[green]yes")
@@ -74,7 +76,6 @@ def get_aei_metadata(project_id: str) -> dict:
     rich.print(f"[purple]{aei_data.keys()}")
     data = {
         "#id": "",
-        "#author": "",
         "title": aei_data["Título"],
         "startDate": "",
         "endDate": "",
@@ -85,9 +86,9 @@ def get_aei_metadata(project_id: str) -> dict:
             "@organizations": "aei",
             "call": aei_data["Convocatoria"],
             "area": aei_data["Área"],
-            "subarea": aei_data["Subárea"]
+            "subarea": aei_data["Subárea"],
+            "partners": []
         },
-        "ourBudget": float(aei_data["€ Conced."].replace(".", "").replace(",", ".")),
         "totalBudget": float(aei_data["€ Conced."].replace(".", "").replace(",", "."))
     }
     return data
@@ -115,8 +116,7 @@ def aei_project(mc: MetadataCollector, project_id, acronym, time_start: str = ""
             exit()
     else:
         rich.print("[purple]Ingesting into database (forced with cli arguments)")
-    mc.insert_document("projects", data)
-    return data["#id"]
+    return data
 
 
 if __name__ == "__main__":
@@ -135,3 +135,4 @@ if __name__ == "__main__":
         secrets = yaml.safe_load(f)["secrets"]
     mc = init_metadata_collector(secrets)
     data = aei_project(mc, args.project_id, args.acronym, force=args.force)
+    mc.insert_document("projects", data, update=True)

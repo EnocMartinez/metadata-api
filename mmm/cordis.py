@@ -8,6 +8,12 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 3/10/23
 """
+
+try:
+    from .metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
+except ImportError:
+    from metadata_collector import MetadataCollector, init_metadata_collector, init_metadata_collector_env
+
 import os.path
 from argparse import ArgumentParser
 import lxml.etree as etree
@@ -16,6 +22,34 @@ import rich
 from xmlutils import get_elements, get_element, get_element_text
 import requests
 import json
+
+# Harcoded acronyms that are usually missing in CORDIS
+hardcoded_acronyms = {
+    "CLEARWATER SENSORS LTD": "CWS",
+    "MARINE INSTITUTE": "MI",
+    "INSTITUT FRANCAIS DE RECHERCHE POUR L'EXPLOITATION DE LA MER": "ifremer",
+    "ISTITUTO NAZIONALE DI GEOFISICA E VULCANOLOGIA": "INGV",
+    "HELMHOLTZ-ZENTRUM FUR OZEANFORSCHUNG KIEL (GEOMAR)": "GEOMAR"
+}
+
+
+def assign_orgs_to_project(mc: MetadataCollector, data: dict) -> dict:
+    """
+    Loops through all the organizations in a project and assigns the proper @organizatino field (if found).
+    If the shortName (acronym) OR one of the alternative names match it is considered the same
+    """
+    rich.print(data)
+    partners = []
+    registered_organizations = mc.get_documents("organizations")
+    for p in data["funding"]["partners"]:
+        for org in registered_organizations:
+            lower_alt_names = [n.lower() for n in org["alternativeNames"]]
+            if p["acronym"].lower() == org["acronym"].lower() or p["fullName"].lower() in lower_alt_names:
+                p["@organizations"] = org["#id"]
+                break
+        partners.append(p)
+    data["funding"]["partners"] = partners
+    return data
 
 
 def get_cost_from_organization(organization: etree.ElementTree()):
@@ -40,7 +74,7 @@ def __attribute_from_names(organization: etree.ElementTree, terms: list):
         raise LookupError(f"Could not extract value, none of the following terms where found: {terms}")
 
 
-def get_cordis_metadata(project_id: int, folder=".cordis"):
+def get_cordis_metadata(project_id: int, folder=".cordis", clear=False):
     """
     Returns project metadata based on data downloaded from CORDIS.
     :param project_id: cordis id
@@ -50,7 +84,7 @@ def get_cordis_metadata(project_id: int, folder=".cordis"):
     """
 
     os.makedirs(folder, exist_ok=True)
-    if args.clear:
+    if clear:
         rich.print("Cleaning downloaded files...")
         files = [os.path.join(folder, f) for f in os.listdir(folder)]
         for f in files:
@@ -67,7 +101,6 @@ def get_cordis_metadata(project_id: int, folder=".cordis"):
         with open(tmp_file, "w") as f:
             f.write(r.text)
         rich.print("[green]done")
-
 
     with open(tmp_file) as f:
         text = f.read()
@@ -110,37 +143,44 @@ def get_cordis_metadata(project_id: int, folder=".cordis"):
         data["funding"]["call"] = get_element_text(call, f"{pref}title")
 
     organizations = get_elements(tree, f"{pref}organization")
-    rich.print(f"Looking for details of organization '{args.institution}'")
-
+    partners_funding = []
+    # Store information for ALL partners
     for o in organizations:
+        org_funding = {}
         contribution = o.attrib["type"]
+        org_funding["fullName"] = get_element_text(o, f"{pref}legalName")
+        rich.print(f'[green]{org_funding["fullName"]}')
         try:
-            short_name = get_element_text(o, f"{pref}shortName")
-            if short_name == args.institution:
-                data["ourBudget"] = get_cost_from_organization(o)
-                data["funding"]["partnershipType"] = o.attrib["type"]
-            elif contribution == "coordinator":
-                data["funding"]["coordinator"] = short_name
+            org_funding["acronym"] = get_element_text(o, f"{pref}shortName")
         except LookupError as e:
-            continue
+            # If no acronym, let's try to find it in our hardcode list
+            if org_funding["fullName"] in hardcoded_acronyms.keys():
+                org_funding["acronym"] = hardcoded_acronyms[org_funding["fullName"]]
+            else:
+                org_funding["acronym"] = ""
+                rich.print(f"[yellow]No shortName nor hardcoded acronym for '{org_funding['fullName']}'")
 
-    if "ourBudget" not in data.keys():
-        raise LookupError(f"Institution {args.institution} not found in partners list!")
+        org_funding["partnershipType"] = o.attrib["type"]
+        org_funding["budget"] = get_cost_from_organization(o)
+        org_funding["partnershipType"] = o.attrib["type"]
 
+        partners_funding.append(org_funding)
+    data["funding"]["partners"] = partners_funding
     return data
 
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
     argparser.add_argument("project_id", type=str, help="Project ID to fetch in CORDIS", default="")
-    argparser.add_argument("-i", "--institution", type=str, help="Institution of interest short name, e.g. UPC", default="UPC")
-    argparser.add_argument("--clear", action="store_true", help="clears all prevoius downloads", default=False)
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
                            default="secrets-local.yaml")
+    argparser.add_argument("-e", "--environment", action="store_true", help="Initialize from environment variables")
     argparser.add_argument("--force", action="store_true", help="skips insert question", default=False)
+    argparser.add_argument("--clear", action="store_true", help="clears all prevoius downloads", default=False)
 
     args = argparser.parse_args()
-    data = get_cordis_metadata(args.project_id, args.institution)
+
+    data = get_cordis_metadata(args.project_id)
     rich.print(json.dumps(data, indent=2))
 
     if not args.force:
@@ -156,16 +196,16 @@ if __name__ == "__main__":
         secrets = yaml.safe_load(f)["secrets"]
         staconf = secrets["sensorthings"]
 
-    try:
-        from .metadata_collector import MetadataCollector
-        mc = MetadataCollector(secrets["mongodb"]["connection"], secrets["mongodb"]["database"], ensure_ids=False)
+    if args.environment:
+        mc = init_metadata_collector_env()
+    elif args.secrets:
+        with open(args.secrets) as f:
+            secrets = yaml.safe_load(f)["secrets"]
+            mc = init_metadata_collector(secrets)
+    else:
+        raise ValueError("Metadata API needs to be configured using environment variables or yaml file!")
 
-    except ImportError:
-        from metadata_collector import MetadataCollector
-        mc = MetadataCollector(secrets["mongodb"]["connection"], secrets["mongodb"]["database"], ensure_ids=False)
-
-    mc.insert_document("projects", data)
-    # resp = requests.post("http://localhost:5000/v1.0/projects", data=json.dumps(data),
-    #                      headers={"Content-Type": "applications/json"})
-    # rich.print(f"code: {resp.status_code}")
-    # rich.print(f"text: {resp.text}")
+    rich.print(data)
+    data = assign_orgs_to_project(mc, data)
+    rich.print(data)
+    mc.insert_document("projects", data, update=True)

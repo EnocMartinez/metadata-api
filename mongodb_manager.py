@@ -178,13 +178,12 @@ if __name__ == "__main__":
     
     with open(args.secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
+    mc = init_metadata_collector(secrets)
 
-    db_name = secrets["mongodb"]["database"]
+    db_name = mc.database_name
     db_name_hist = db_name + "_hist"
     folder = os.path.join(args.folder, db_name)
     folder_hist = os.path.join(args.folder, db_name_hist)
-
-    mc = init_metadata_collector(secrets)
 
     collections = mc.collection_names
     if args.collections:

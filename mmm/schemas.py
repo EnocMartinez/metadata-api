@@ -175,7 +175,7 @@ __project_types__ = [
     "contract"  # Project with a company, EU or national project regulations do not apply
 ]
 
-__partnership_types__ = ["participant", "thirdParty", "other"]
+__partnership_types__ = ["coordinator", "participant", "thirdParty", "other", "associatedPartner"]
 
 # -----------------------------#
 
@@ -199,10 +199,16 @@ __organizations = {
     "properties": {
         "fullName": {"type": "string"},
         "acronym": {"type": "string"},
+        "alternativeNames": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
+        },
         "ROR": {"type": "string"},
         "EDMO": {"type": "string"},
     },
-    "required": ["fullName", "acronym"]
+    "required": ["fullName", "acronym", "alternativeNames"]
 }
 
 # ------------------------------------------------- #
@@ -450,7 +456,6 @@ __projects = {
         "acronym": {"type": "string"},
         "title": {"type": "string"},
         "totalBudget": {"type": "number"},
-        "ourBudget": {"type": "number"},
         "type": {"type": "string", "enum": __project_types__},
         "active": {"type": "boolean"},
         # Link to founding entity
@@ -461,12 +466,25 @@ __projects = {
                 "grantId": {"type": "string"},
                 "call": {"type": "string"},
                 "coordinator": {"type": "string"},
-                "partnershipType": {"type": "string", "enum": __partnership_types__},
+                "partners": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "@organization": {"type": "string"},
+                            "acronym": {"type": "string"},
+                            "fullName": {"type": "string"},
+                            "budget": {"type": "number"},
+                            "partnershipType": {"type": "string", "enum": __partnership_types__}
+                        },
+                        "required": ["acronym", "fullName", "budget", "partnershipType"]
+                    }
+                },
             },
             "required": ["@organizations", "grantId"]
         },
     },
-    "required": ["acronym", "title", "totalBudget", "ourBudget", "type", "funding"]
+    "required": ["acronym", "title", "totalBudget", "type", "funding", "dateStart", "dateEnd"]
 }
 
 mmm_schemas = {
