@@ -8,15 +8,13 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 27/10/23
 """
-import os
 
 from mmm import MetadataCollector, CkanClient
 import rich
 
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
-from mmm.sensorthings.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream
-from mmm.sensorthings.db import SensorThingsDbConnector
-import pandas as pd
+from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream
+from mmm.data_sources import SensorthingsDbConnector
 
 
 def load_fields_from_dict(doc: dict, fields: list) -> dict:

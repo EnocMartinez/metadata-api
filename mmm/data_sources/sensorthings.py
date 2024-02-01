@@ -18,6 +18,7 @@ from .timescaledb import TimescaleDB
 from ..data_manipulation import merge_dataframes_by_columns
 import rich
 
+
 def varname_from_datastream(ds_name):
     """
     Extracts a variable name from a datastream name. The datastream name must follow the following pattern:
@@ -32,6 +33,7 @@ def varname_from_datastream(ds_name):
     varname = splitted[2]
     return varname
 
+
 def varname_from_datastream_dataframe(df, datastream_name):
     """
     Renames a dataframe from raw_data table (value, qc_flag) to variable names, e.g. if variable name TEMP, then
@@ -42,6 +44,7 @@ def varname_from_datastream_dataframe(df, datastream_name):
     varname_std = varname + "_std"
     df = df.rename(columns={"value": varname, "qc_flag": varname_qc, "stdev": varname_std})
     return df, varname
+
 
 def varname_from_datastream(datastream_name):
     """
@@ -67,8 +70,7 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         self.__sensor_properties = {}
 
         if timescaledb:
-            rich.print("[orange]Init TimescaleDB")
-            self.timescale = TimescaleDB(self,"raw_data", logger)
+            self.timescale = TimescaleDB(self, logger)
         else:
             self.timescale = None
 
@@ -406,5 +408,19 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
             df = df.rename(columns=rename)
             data.append(df)
         return merge_dataframes_by_columns(data)
+
+    def check_if_table_exists(self, view_name):
+        """
+        Checks if a view already exists
+        :param view_name: database view to check if exists
+        :return: True if exists, False if it doesn't
+        """
+        # Select all from information_schema
+        query = "SELECT table_name FROM information_schema.tables"
+        df = self.dataframe_from_query(query)
+        table_names = df["table_name"].values
+        if view_name in table_names:
+            return True
+        return False
 
 

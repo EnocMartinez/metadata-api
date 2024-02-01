@@ -43,7 +43,7 @@ class DataCollector:
         if csv_file:
             return self.netcdf_from_csv(conf, out_folder, csv_file)
 
-        if conf["dataSource"] in ["sensorthingsdb", "sensorthings-tsdb"]:
+        if conf["dataSource"] in ["sensorthings-db", "sensorthings-tsdb", "sensorthings-tsdb-profiles"]:
             dataset = self.netcdf_from_sta(conf, time_start, time_end, out_folder)
 
         elif conf["dataSource"] == "fileserver":

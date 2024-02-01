@@ -70,8 +70,7 @@ class PgDatabaseConnector(LoggerSuperclass):
 
     def list_from_query(self, query):
         """
-        Makes a query to the database using a cursor object and returns a DataFrame object
-        with the reponse
+        Makes a query to the database using a cursor object and returns a list with the reponse
         :param cursor: database cursor
         :param query: string with the query
         :returns DataFrame with the query result

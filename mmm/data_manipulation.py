@@ -582,6 +582,8 @@ def merge_dataframes_by_columns(dataframes: list, timestamp="timestamp"):
     :param timestamp:
     :return:
     """
+    if len(dataframes) < 1:
+        raise ValueError(f"Got {len(dataframes)} dataframes in list!")
     df = dataframes[0]
     for i in range(1, len(dataframes)):
         temp_df = dataframes[i].copy()

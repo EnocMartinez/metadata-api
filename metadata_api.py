@@ -18,8 +18,6 @@ from mmm import MetadataCollector, init_metadata_collector_env, init_metadata_co
 from mmm.common import setup_log
 from mmm.schemas import mmm_schemas
 import json
-import os
-import rich
 
 app = Flask(__name__)
 CORS(app)
@@ -168,7 +166,6 @@ def project_timeline():
         else:
             p["active"] = True
 
-    rich.print(projects)
     start = datetime.datetime.strptime("2010-01-01", "%Y-%m-%d")
     end = datetime.datetime.strptime("2030-01-01", "%Y-%m-%d")
     ctime = start
