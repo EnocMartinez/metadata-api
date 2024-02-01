@@ -29,6 +29,27 @@ def api_error(message, code=400):
     return Response(json.dumps(json_error), status=code, mimetype="application/json")
 
 
+@app.route('/', methods=['GET'])
+def root():
+    return api_error({
+        "message": "No version defined! try appending v1.0"
+    })
+
+
+@app.route('/v1.0', methods=['GET'])
+@app.route('/v1.0/', methods=['GET'])
+def default_index():
+    print("url", request.url)
+    print("root_url", request.root_url)
+
+    url = request.url
+    if url[-1] == "/":
+        url = url[:-1]
+    d = {c: f"{url}/{c}" for c in mc.collection_names}
+    return Response(json.dumps(d), status=200, mimetype="application/json")
+
+
+
 @app.route('/v1.0/<path:collection>', methods=['GET'])
 def get_collection(collection: str):
     try:

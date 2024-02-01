@@ -123,6 +123,7 @@ class MetadataCollector:
         :param organization: organization that owns the infrastructure (must be an organizations #id)
         :param ensure_ids: make sure that all elements have a unique #id
         """
+        print(connection)
         self.default_author = default_author
         self.organization = organization
         self.__connection_chain = connection
