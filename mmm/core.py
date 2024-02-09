@@ -8,6 +8,7 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 27/10/23
 """
+import logging
 
 from mmm import MetadataCollector, CkanClient
 import rich
@@ -308,6 +309,7 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
     """
     This function performs a bulk load of the data contained in the input file
     """
+    rich.print("Loading file...", end="")
     if filename.endswith(".csv"):
         try:
             df = open_csv(filename, time_format="%Y-%m-%dT%H:%M:%Sz")
@@ -316,12 +318,15 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
     else:
         rich.print(f"[red]extension {filename.split('.')[-1]} not recognized")
         raise ValueError("Invalid extension")
+    rich.print("[green]done")
 
-    db = SensorThingsDbConnector(psql_conf)
+    db = SensorthingsDbConnector(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
+                                 psql_conf["password"], logging.getLogger())
 
     # Get the datastream names
     sensor_id = db.value_from_query(f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';')
     datastreams = db.dict_from_query(f'select "NAME", "ID" from "DATASTREAMS" where "SENSOR_ID" = \'{sensor_id}\';')
+
     # Harcoded solution: name is expected to be station:sensor:variable:processing_type
     datastream_dict = {}
     if data_type == "timeseries":

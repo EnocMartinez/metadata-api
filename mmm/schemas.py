@@ -56,10 +56,8 @@ __data_types__ = {
 __data_sources__ = {
     "type": "string",
     "enum": [
-        "sensorthings-db",              # regular SensorThings database
-        "sensorthings-tsdb",            # SensorThings raw-data hypertable (TimescaleDB)
-        "sensorthings-tsdb-profile",    # SensorThings profiles-data hypertable (TimescaleDB)
-        "filesystem"  # files in a directory tree in the filesystem, like year/month/day/myfile.txt
+        "sensorthings",  # regular SensorThings database
+        "filesystem"     # files in a directory tree in the filesystem, like year/month/day/myfile.txt
     ]
 }
 
@@ -256,7 +254,6 @@ __process_options = {
         "properties": {"parameters": __average_parameters},
     },
     "else": {
-        #         "properties": {"properties": {"required": ["path"], "type": "object"}}
         "properties": {"parameters": __inference_parameters}
     }
 }
@@ -427,16 +424,35 @@ __operations = {
     "required": ["description", "timeRange", "type", "participants", "@activities"],
 }
 
+__variable_types = [
+    "environmental",  # Physical or chemical variables measured in the environment e.g. temperature, speed, pH, etc.
+    "biodiversity",   # biodiversity variables such as species detections
+    "technical"       # technical data of no scientific interest, e.g. battery voltage, available memory, etc.
+]
+
 __variables = {
     "$id": "mmm:variable",
     "type": "object",
     "properties": {
-        "standard_name": {"type": "string"},
+        "standard_name": {"type": "string"},  # CF standard name for environmental data, or WoRMS name for biodiversity
         "description": {"type": "string"},
-        "definition": {"type": "string"}
+        "definition": {"type": "string"},
+        "cf_compliant": {"type": "boolean"},  # compliant with the Climate & Forecast standard
+        "type": {"type": "string", "enum": __variable_types},
+        "worms_id": {"type": "string"},  # WoRMS name for fish species
+        "polar": {  # Used to define a polar variable (e.g. wind speed/wind direction)
+            "type": "object",
+            "properties": {
+                "module": {"type": "string"},
+                "angle": {"type": "string"}
+            },
+            "required": ["module", "angle"]
+        }
     },
-    "required": ["standard_name", "description", "definition"]
+    "required": ["standard_name", "description", "definition", "cf_compliant", "type"]
 }
+
+__unit_type = ["linear", "logarithmic"]
 
 __units = {
     "$id": "mmm:units",
@@ -444,9 +460,10 @@ __units = {
     "properties": {
         "name": {"type": "string"},
         "symbol": {"type": "string"},
-        "definition": {"type": "string"}
+        "definition": {"type": "string"},
+        "type": {"type": "string", "enum": __unit_type}
     },
-    "required": ["name", "symbol", "definition"]
+    "required": ["name", "symbol", "definition", "type"]
 }
 
 __projects = {

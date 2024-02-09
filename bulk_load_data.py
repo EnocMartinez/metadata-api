@@ -11,14 +11,14 @@ created: 21/09/2023
 from argparse import ArgumentParser
 from mmm import MetadataCollector, CkanClient, propagate_mongodb_to_sensorthings
 from mmm.metadata_collector import init_metadata_collector
-from mmm.sensorthings.db import SensorThingsDbConnector
+from mmm import SensorthingsDbConnector
 import yaml
 
 from mmm.core import load_fields_from_dict, bulk_load_data
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
-    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets-local.yaml")
+    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets.yaml")
     argparser.add_argument("file", help="Data file", type=str)
     argparser.add_argument("sensor_id", help="Sensor ID", type=str)
     argparser.add_argument("-a", "--average", help="Averaged data (period must be specified)", type=str, default="")

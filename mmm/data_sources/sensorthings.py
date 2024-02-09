@@ -10,13 +10,17 @@ created: 4/10/23
 
 
 from .postgresql import PgDatabaseConnector
-from ..common import LoggerSuperclass, reverse_dictionary, dataframe_to_dict
+from ..common import LoggerSuperclass, reverse_dictionary, dataframe_to_dict, run_subprocess
 import json
 import pandas as pd
 import numpy as np
 from .timescaledb import TimescaleDB
-from ..data_manipulation import merge_dataframes_by_columns
+from ..data_manipulation import merge_dataframes_by_columns, slice_dataframes
 import rich
+from rich.progress import Progress
+import time
+import os
+import gc
 
 
 def varname_from_datastream(ds_name):
@@ -51,6 +55,26 @@ def varname_from_datastream(datastream_name):
     Takes a raw data name (e.g. OBSEA:SBE37:PSAL:raw_data) to variable name (PSAL)
     """
     return datastream_name.split(":")[2]
+
+
+def rsync_files(host: str, folder, files: list):
+    """
+    Uses rsync to copy some files to a remote folder
+    """
+    assert type(host) is str, "invalid type"
+    assert type(folder) is str, "invalid type"
+    assert type(files) is list, "invalid type"
+    run_subprocess(["ssh", host, f"mkdir -p {folder} -m=777"], fail_exit=True)
+    run_subprocess(f"rsync -azh {' '.join(files)} {host}:{folder}")
+
+
+def rm_remote_files(host, files):
+    """
+    Runs remove file over ssh
+    """
+    assert type(host) is str, "invalid type"
+    assert type(files) is list, "invalid type"
+    run_subprocess(["ssh", host, f"rm  {' '.join(files)}"], fail_exit=True)
 
 
 class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
@@ -93,6 +117,9 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         self.thing_name_id = reverse_dictionary(self.thing_id_name)
         self.obs_prop_id_name = reverse_dictionary(self.obs_prop_name_id)
         self.datastream_properties = self.get_datastream_properties()
+
+        self.__last_observation_index = -1
+        self.get_last_observation_id()
 
     def sensor_var_from_datastream(self, datastream_id):
         """
@@ -423,4 +450,399 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
             return True
         return False
 
+    def dict_from_query(self, query, debug=False):
+        self.exec_query(query, debug=debug)
+        response = self.cursor.fetchall()
+        if len(response) == 0:
+            return {}
+        elif len(response[0]) != 2:
+            raise ValueError(f"Expected two fields in response, got {len(response[0])}")
 
+        return {key: value for key, value in response}
+
+    def value_from_query(self, query, debug=False):
+        """
+        Run a single value from a query
+        """
+        self.exec_query(query, debug=debug)
+        response = self.cursor.fetchall()
+        return response[0][0]
+
+    def inject_to_timeseries(self, df, datastreams, max_rows=100000, disable_triggers=False,
+                             tmp_folder="/tmp/sta_db_copy/data"):
+        """
+        Inject all data in df into the timeseries table via SQL copy
+        """
+
+        init = time.time()
+        os.makedirs(tmp_folder, exist_ok=True)
+        os.chown(tmp_folder, os.getuid(), os.getgid())
+
+        rich.print("Splitting input dataframe into smaller ones")
+        rows = int(max_rows / len(datastreams))
+        dataframes = slice_dataframes(df, max_rows=rows)
+        files = self.dataframes_to_timeseries_csv(dataframes, datastreams, tmp_folder)
+        rich.print("Generating all files took %0.02f seconds" % (time.time() - init))
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            t = time.time()
+            rich.print("rsync files to remote server...", end="")
+            rsync_files(self.host, tmp_folder, files)
+            rich.print(f"[green]done![/green] took {time.time() - t:.02f} s")
+
+        if disable_triggers:
+            self.disable_all_triggers()
+
+        with Progress() as progress:
+            task1 = progress.add_task("SQL COPY to timeseries hypertable...", total=len(dataframes))
+            for file in files:
+                self.sql_copy_csv(file, "timeseries")
+                progress.advance(task1, advance=1)
+
+        if disable_triggers:
+            self.enable_all_triggers()
+
+        with Progress() as progress:
+            task1 = progress.add_task("remove temp files...", total=len(dataframes))
+            for file in files:
+                os.remove(file)
+                progress.advance(task1, advance=1)
+
+        rich.print("[magenta]Inserting all via SQL COPY took %.02f seconds" % (time.time() - init))
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            rm_remote_files(self.host, files)
+
+
+    def inject_to_profiles(self, df, datastreams, max_rows=100000, disable_triggers=False,
+                           tmp_folder="/tmp/sta_db_copy/data"):
+        """
+        Inject all data in df into the timeseries table via SQL copy
+        """
+
+        init = time.time()
+        os.makedirs(tmp_folder, exist_ok=True)
+        os.chown(tmp_folder, os.getuid(), os.getgid())
+
+        rich.print("Splitting input dataframe into smaller ones")
+        rows = int(max_rows / len(datastreams))
+        dataframes = slice_dataframes(df, max_rows=rows)
+        files = self.dataframes_to_profile_csv(dataframes, datastreams, tmp_folder)
+        rich.print("Generating all files took %0.02f seconds" % (time.time() - init))
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            t = time.time()
+            rich.print("rsync files to remote server...", end="")
+            rsync_files(self.host, tmp_folder, files)
+            rich.print(f"[green]done![/green] took {time.time() - t:.02f} s")
+
+        if disable_triggers:
+            self.disable_all_triggers()
+
+        with Progress() as progress:
+            task1 = progress.add_task("SQL COPY to profiles hypertable...", total=len(dataframes))
+            for file in files:
+                self.sql_copy_csv(file, "profiles")
+                progress.advance(task1, advance=1)
+
+        if disable_triggers:
+            self.enable_all_triggers()
+
+        with Progress() as progress:
+            task1 = progress.add_task("remove temp files...", total=len(dataframes))
+            for file in files:
+                os.remove(file)
+                progress.advance(task1, advance=1)
+
+        rich.print("[magenta]Inserting all via SQL COPY took %.02f seconds" % (time.time() - init))
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            rm_remote_files(self.host, files)
+
+
+    def inject_to_observations(self, df: pd.DataFrame, datastreams: dict, url: str, foi_id: int, avg_period: str,
+                               max_rows=10000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data",
+                               profile=False):
+        """
+        Injects all data in a dataframe using SQL copy.
+        """
+        init = time.time()
+        os.makedirs(tmp_folder, exist_ok=True)
+        os.chown(tmp_folder, os.getuid(), os.getgid())
+        rich.print("POSTing the first row to get the Feature ID")
+
+        rich.print("Splitting input dataframe into smaller ones")
+        rows = int(max_rows / len(datastreams))
+        dataframes = slice_dataframes(df, max_rows=rows)
+
+        files = self.dataframes_to_observations_csv(dataframes, datastreams, tmp_folder, foi_id, avg_period=avg_period, profile=profile)
+        rich.print(f"Generating all files took {time.time() - init:0.02f} seconds")
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            t = time.time()
+            rich.print("rsync files to remote server...", end="")
+            rsync_files(self.host, tmp_folder, files)
+            rich.print(f"[green]done![/green] took {time.time() - t:.02f} s")
+
+        if disable_triggers:
+            self.disable_all_triggers()
+
+        with Progress() as progress:
+            task1 = progress.add_task("SQL COPY to OBSERVATIONS table...", total=len(dataframes))
+            for file in files:
+                self.sql_copy_csv(file, "OBSERVATIONS")
+                progress.advance(task1, advance=1)
+
+        if disable_triggers:
+            self.enable_all_triggers()
+
+        rich.print("Forcing PostgreSQL to update Observation ID...")
+        self.exec_query("select setval('\"OBSERVATIONS_ID_seq\"', (select max(\"ID\") from \"OBSERVATIONS\") );")
+
+        with Progress() as progress:
+            task1 = progress.add_task("remove temp files...", total=len(dataframes))
+            for file in files:
+                os.remove(file)
+                progress.advance(task1, advance=1)
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            rm_remote_files(self.host, files)
+
+    def dataframes_to_observations_csv(self, dataframes: list, column_mapper: dict, folder: str, feature_id: int, avg_period:str = "", profile=False):
+        """
+        Write dataframes into local csv files ready for sql copy following the syntax in table OBSERVATIONS
+        """
+        files = []
+        i = 0
+        for dataframe in dataframes:
+            file = os.path.join(folder, f"observations_copy_{i:04d}.csv")
+            i += 1
+            self.format_csv_sta(dataframe, column_mapper, file, feature_id, avg_period=avg_period, profile=profile)
+            files.append(file)
+
+        return files
+
+    def dataframes_to_timeseries_csv(self, dataframes: list, column_mapper: dict, folder: str):
+        """
+        Write dataframes into local csv files ready for sql copy following the syntax in table OBSERVATIONS
+        """
+        i = 0
+        files = []
+        for dataframe in dataframes:
+            file = os.path.join(folder, f"timeseries_copy_{i:04d}.csv")
+            i += 1
+            rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
+            self.format_timeseries_csv(dataframe, column_mapper, file)
+            files.append(file)
+        return files
+
+    def dataframes_to_profile_csv(self, dataframes: list, column_mapper: dict, folder: str):
+        """
+        Write dataframes into local csv files ready for sql copy following the syntax in table OBSERVATIONS
+        """
+        i = 0
+        files = []
+        for dataframe in dataframes:
+            file = os.path.join(folder, f"profile_copy_{i:04d}.csv")
+            i += 1
+            rich.print(f"format profile CSV {i:04d} of {len(dataframes)}")
+            self.format_profile_csv(dataframe, column_mapper, file)
+            files.append(file)
+        return files
+
+    def format_csv_sta(self, df_in, column_mapper, filename, feature_id, avg_period: str = "", profile=False):
+        """
+        Takes a dataframe and arranges it accordingly to the OBSERVATIONS table from a SensorThings API, preparing the
+        data to be inserted by a COPY statement
+        :param df_in: input dataframe
+        :param column_mapper: structure that maps datastreams with dataframe columns
+        :param filename: name of the file to be generated
+        :param feature_id: ID of the FeatureOfInterst
+        :param avg_period: if set, the phenomenon time end will be timestamp + avg_period to generate a timerange.
+                           used in averaged data.
+        """
+        init = False
+        if self.__last_observation_index < 0:  # not initialized
+            self.__last_observation_index = self.get_last_observation_id()
+
+        for colname, datastream_id in column_mapper.items():
+            if colname not in df_in.columns:
+                continue
+
+            df = df_in.copy(deep=True)
+            quality_control = False
+            stdev = False
+            keep = ["timestamp", colname]
+            if colname + "_qc" in df_in.columns:
+                quality_control = True
+                keep += [colname + "_qc"]
+
+            if colname + "_std" in df_in.columns:
+                stdev = True
+                keep += [colname + "_std"]
+
+            if profile:
+                keep += ["depth"]
+
+            df["timestamp"] = df.index.values
+            for c in df.columns:
+                if c not in keep:
+                    del df[c]
+
+            if df.empty:
+                rich.print(f"[yellow]Got empty dataframe for {colname}")
+                continue
+
+            df["PHENOMENON_TIME_START"] = np.datetime_as_string(df["timestamp"], unit="s", timezone="UTC")
+
+            if avg_period:  # if we have the average period
+                df["PHENOMENON_TIME_END"] = np.datetime_as_string(df["timestamp"] + pd.to_timedelta(avg_period),
+                                                                  unit="s", timezone="UTC")
+            else:
+                df["PHENOMENON_TIME_END"] = df["PHENOMENON_TIME_START"]
+            df["RESULT_TIME"] = df["PHENOMENON_TIME_START"]
+            df["RESULT_TYPE"] = 0
+            df["RESULT_NUMBER"] = df[colname]
+            df["RESULT_BOOLEAN"] = np.nan
+            df["RESULT_JSON"] = np.nan
+            df["RESULT_STRING"] = df[colname].astype(str)
+            df["RESULT_QUALITY"] = "{\"qc_flag\": 2}"
+            df["VALID_TIME_START"] = np.nan
+            df["VALID_TIME_END"] = np.nan
+            if profile:
+                df["PARAMETERS"] = ""  # in case of profile we need to add depth as parameter
+            else:
+                df["PARAMETERS"] = np.nan
+            df["DATASTREAM_ID"] = datastream_id
+            df["FEATURE_ID"] = feature_id
+            df["ID"] = np.arange(0, len(df.index.values), dtype=int) + self.__last_observation_index + 1
+            self.__last_observation_index = df["ID"].values[-1]
+
+            # Quality control and standard deviation
+            for i in range(0, len(df.index.values)):
+                qc_value = np.nan
+                std_value = np.nan
+                if stdev:
+                    std_value = df[colname + "_std"].values[i]
+                if qc_value:
+                    qc_value = df[colname + "_qc"].values[i]
+                if not np.isnan(qc_value) and stdev and not np.isnan(std_value):
+                    # If we have QC and STD, put both
+                    df["RESULT_QUALITY"].values[i] = "{\"qc_flag\": %d, \"stdev\": %f}" % \
+                                                     (df[colname + "_qc"].values[i], df[colname + "_std"].values[i])
+                elif not np.isnan(qc_value):
+                    # If we only have QC, put it
+                    if df[colname + "_qc"].values[i]:
+                        df["RESULT_QUALITY"].values[i] = "{\"qc_flag\": %d}" % (df[colname + "_qc"].values[i])
+                elif not np.isnan(std_value):
+                    # If we only have STD, put it
+                    if df[colname + "_std"].values[i]:
+                        df["RESULT_QUALITY"].values[i] = "{\"stdev\": %d}" % (df[colname + "_std"].values[i])
+
+            if profile:
+                df["depth"] = df["depth"].values.astype(int)  # force conversion to integer
+                for i in range(0, len(df.index.values)):
+                    df["PARAMETERS"].values[i] = "{\"depth\": %d}" % (df["depth"].values[i])
+
+            del df["timestamp"]
+            del df[colname]
+            if quality_control:
+                del df[colname + "_qc"]
+            if stdev:
+                del df[colname + "_std"]
+            if profile:
+                del df["depth"]
+
+            if not init:
+                df_final = df
+                init = True
+            else:
+                df_final = pd.concat([df_final, df])
+
+        df_final.to_csv(filename, index=False)
+
+    def format_timeseries_csv(self, df_in, column_mapper, filename):
+        """
+        Format from a regular dataframe to a Dataframe ready to be copied into a TimescaleDB simple table
+        :param df_in:
+        :param column_mapper:
+        :return:
+        """
+        df_final = None
+        init = False
+        for colname, datastream_id in column_mapper.items():
+            if colname not in df_in.columns:  # if column is not in dataset, just ignore this datastream
+                continue
+            df = df_in.copy(deep=True)
+            keep = ["timestamp", colname, colname + "_qc"]
+            df["timestamp"] = df.index.values
+            df = df[keep]
+            df = df.dropna(how="any")
+            df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+            df["datastream_id"] = datastream_id
+            df = df.set_index("time")
+            df = df.rename(columns={colname: "value", colname + "_qc": "qc_flag"})
+            df["qc_flag"] = df["qc_flag"].values.astype(int)
+            del df["timestamp"]
+            if not init:
+                df_final = df
+                init = True
+            else:
+                df_final = pd.concat([df_final, df])
+        df_final.to_csv(filename)
+        del df_final
+        gc.collect()
+
+    def format_profile_csv(self, df_in, column_mapper, filename):
+        """
+        Format from a regular dataframe to a Dataframe ready to be copied into a TimescaleDB simple table
+        :param df_in:
+        :param column_mapper:
+        :return:
+        """
+        df_final = None
+        init = False
+        for colname, datastream_id in column_mapper.items():
+            if colname not in df_in.columns:  # if column is not in dataset, just ignore this datastream
+                continue
+            df = df_in.copy(deep=True)
+            keep = ["timestamp", "depth", colname, colname + "_qc"]
+            df["timestamp"] = df.index.values
+            df = df[keep]
+            df = df.dropna(how="any")
+            df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+            df["datastream_id"] = datastream_id
+            df = df.set_index("time")
+            df = df.rename(columns={colname: "value", colname + "_qc": "qc_flag"})
+            df["qc_flag"] = df["qc_flag"].values.astype(int)
+            del df["timestamp"]
+            if not init:
+                df_final = df
+                init = True
+            else:
+                df_final = pd.concat([df_final, df])
+        df_final.to_csv(filename)
+        del df_final
+        gc.collect()
+
+    def sql_copy_csv(self, filename, table="OBSERVATIONS", delimiter=","):
+        """
+        Execute a COPY query to copy from a local CSV file to a database
+        :return:
+        """
+        query = "COPY public.\"%s\" FROM '%s' DELIMITER '%s' CSV HEADER;" % (table, filename, delimiter)
+        rich.print(f"[purple]{query}")
+        self.cursor.execute(query)
+        self.connection.commit()
+
+    def get_last_observation_id(self):
+        """
+        Gets last observation in database
+        :return:
+        """
+        query = "SELECT \"ID\" FROM public.\"OBSERVATIONS\" ORDER BY \"ID\" DESC LIMIT 1"
+        df = self.dataframe_from_query(query)
+        #  Check if the table is empty
+        if df.empty:
+            return 0
+        return int(df["ID"].values[0])

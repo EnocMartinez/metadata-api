@@ -21,10 +21,10 @@ class PgDatabaseConnector(LoggerSuperclass):
 
     def __init__(self, host, port, db_name, db_user, db_password, logger):
         LoggerSuperclass.__init__(self, logger, "DB connector")
-        self.__host = host
-        self.__port = port
-        self.__name = db_name
-        self.__user = db_user
+        self.host = host
+        self.port = port
+        self.name = db_name
+        self.user = db_user
         self.__pwd = db_password
 
         self.connection = None
@@ -37,7 +37,7 @@ class PgDatabaseConnector(LoggerSuperclass):
 
     def init_db(self):
         try:
-            self.connection = psycopg2.connect(host=self.__host, port=self.__port, dbname=self.__name, user=self.__user,
+            self.connection = psycopg2.connect(host=self.host, port=self.port, dbname=self.name, user=self.user,
                                                password=self.__pwd)
             self.cursor = self.connection.cursor()
             self.db_initialized = True

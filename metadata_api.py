@@ -32,22 +32,15 @@ def api_error(message, code=400):
 @app.route('/', methods=['GET'])
 def root():
     return api_error({
-        "message": "No version defined! try appending v1.0"
+        "message": f"No version defined! try {root_url}/v1.0"
     })
 
 
 @app.route('/v1.0', methods=['GET'])
 @app.route('/v1.0/', methods=['GET'])
 def default_index():
-    print("url", request.url)
-    print("root_url", request.root_url)
-
-    url = request.url
-    if url[-1] == "/":
-        url = url[:-1]
-    d = {c: f"{url}/{c}" for c in mc.collection_names}
+    d = {c: f"{root_url}/v1.0/{c}" for c in mc.collection_names}
     return Response(json.dumps(d), status=200, mimetype="application/json")
-
 
 
 @app.route('/v1.0/<path:collection>', methods=['GET'])
@@ -173,6 +166,12 @@ def project_timeline():
     Returns a time-series (grafana-like format) with all active projects and their respective months number.
     Only return projects that are european and national and that did not en before the last 4 months
     """
+    show_all = False
+
+    p = request.args.get('showAll')
+    if p and p.lower() == "true":
+        show_all = True
+
     projects = mc.get_documents("projects")
     # Keep only projects with start and end date
     projects = [p for p in projects if p["dateStart"] and p["dateEnd"]]
@@ -190,11 +189,12 @@ def project_timeline():
     start = datetime.datetime.strptime("2010-01-01", "%Y-%m-%d")
     end = datetime.datetime.strptime("2030-01-01", "%Y-%m-%d")
     ctime = start
-    while ctime <= end:
-        data = {"time": ctime.strftime("%Y-%m-%d %H:%M:%S")}
-        for proj in projects:
 
-            if not proj["active"]:
+    while ctime <= end:
+        activity = False  # flag that determines if there was activity in this period
+        data = {}
+        for proj in projects:
+            if not proj["active"] and not show_all:
                 continue
 
             name = proj["acronym"]
@@ -203,9 +203,12 @@ def project_timeline():
             elif ctime > proj["end"]:
                 pass
             else:
+                activity = True
                 proj["count"] += 1
                 data[name] = proj["count"]
-        resp.append(data)
+        if activity:
+            data["time"] = ctime.strftime("%Y-%m-%d %H:%M:%S")
+            resp.append(data)
         ctime += relativedelta(months=1)
 
     return Response(json.dumps(resp), status=200, mimetype="application/json")
@@ -218,16 +221,20 @@ if __name__ == "__main__":
     args = argparser.parse_args()
 
     log = setup_log("Metadata API")
-
     if args.environment:
         mc = init_metadata_collector_env()
+        import os
+        root_url = os.environ["mmapi_root_url"]
+        port = os.environ["mmapi_port"]
     elif args.secrets:
         with open(args.secrets) as f:
             secrets = yaml.safe_load(f)["secrets"]
             mc = init_metadata_collector(secrets)
+            root_url = secrets["mmapi"]["root_url"]
+            port = secrets["mmapi"]["port"]
     else:
         raise ValueError("Metadata API needs to be configured using environment variables or yaml file!")
 
     log.info("starting Metadata API")
-    app.run(host="0.0.0.0", debug=True)
+    app.run(host="0.0.0.0", port=port, debug=True)
 
