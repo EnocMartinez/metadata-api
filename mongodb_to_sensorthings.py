@@ -15,7 +15,7 @@ from mmm.metadata_collector import init_metadata_collector
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
-    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets-local.yaml")
+    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets.yaml")
     argparser.add_argument("-c", "--collections", help="Only use certain collections (comma-separated list)", default="all")
 
     args = argparser.parse_args()

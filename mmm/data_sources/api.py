@@ -1,21 +1,62 @@
 #!/usr/bin/env python3
 """
 
-Classes and functions to interact with SensorThings via its API
-
 author: Enoc Martínez
 institution: Universitat Politècnica de Catalunya (UPC)
 email: enoc.martinez@upc.edu
 license: MIT
-created: 24/11/23
+created: 23/3/21
 """
-
-import json
-import logging  # to disaple requests logs
+import pandas as pd
 import requests
+import json
+import logging as log
 import rich
 
+_all_ = ["Sensor", "Thing"]
+
 _api_cache = {}
+
+def strip_nans(mydict: dict) -> dict:
+    """
+    Loops through all elements in a dict and replaces nan for string "NOT_AVAILBAL"
+    :param mydict: input dict
+    :return: dict
+    """
+
+    for key, value in mydict.items():
+        if type(value) == str:
+            continue
+        elif np.isnan(value):
+            properties[key] = "NOT_AVAILABLE"
+    return mydict
+
+def get_name_list(element: str, url: str) -> list:
+    """
+    Returns a list of the names registered in SensorThings
+    :param element: type like 'Datastreams' or 'Things'
+    :param url: STA base url
+    :return: list with names
+    """
+    get_url = url + f"/{element}?$top=10000000&$select=name"
+    r = sensorthings_get(get_url)
+    names = [entry["name"] for entry in r["value"]]
+    return names
+
+def get_name_and_ids(element, url) -> (list, dict):
+    """
+    Similar to get_name_list but returns a tuple with (list, dict) where list is the list of names and the dict
+    follows the pattern {name(str): id(int)}
+    :param element:
+    :param url:
+    :return:
+    """
+    get_url = url + f"/{element}?$top=10000000&$select=name,id"
+    r = sensorthings_get(get_url)
+    names = [entry["name"] for entry in r["value"]]
+    ids = {entry["name"]:entry["@iot.id"] for entry in r["value"]}
+    return names, ids
+
 
 
 def strip_sta_elements(data: dict, delete=[]):
@@ -42,27 +83,12 @@ def compare_sta_elements(element1, element2):
     :param element2:
     :return: True/False
     """
-    __ignore_elements = ["Sensor", "ObservedProperty", "Thing", "resultTime", "phenomenonTime", "observedArea"]
+    __ignore_elements = ["Sensor", "ObservedProperty", "Thing", "resultTime", "phenomenonTime" , "observedArea"]
     e1 = strip_sta_elements(element1, delete=__ignore_elements)
     e2 = strip_sta_elements(element2, delete=__ignore_elements)
-    e1 = remove_empty_fields(e1)
-    e2 = remove_empty_fields(e2)
     if e1 == e2:
         return True
     return False
-
-
-def remove_empty_fields(doc: dict) -> dict:
-    """
-    This function remove all empty fields in a structure. {"hola": true, "hi": ""} -> {"hola": true}
-    """
-    assert (type(doc) is dict)
-    for key, value in doc.copy().items():
-        if type(value) is str and value == "":
-            doc.pop(key)  # remove key
-        if type(value) is dict:
-            doc[key] = remove_empty_fields(doc[key])
-    return doc
 
 
 def check_http_status(http_response, exception=True):
@@ -77,11 +103,11 @@ def check_http_status(http_response, exception=True):
         success = True
     else:
         success = False
-        rich.print("response code %d" % http_response.status_code)
-        rich.print("response headers:", http_response.headers)
-        rich.print("ERROR Report")
+        print("response code %d" % http_response.status_code)
+        print("response headers:", http_response.headers)
+        print("ERROR Report")
         for key, value in json.loads(http_response.text).items():
-            rich.print("    %s: %s" % (key, value))
+            print("    %s: %s" % (key, value))
 
     if exception and not success:
         raise ValueError("HTTP Error (code %d)" % http_response.status_code)
@@ -90,45 +116,29 @@ def check_http_status(http_response, exception=True):
 
 
 def print_http_response(resp):
-    rich.print("response code %d" % resp.status_code)
-    rich.print("response headers:", resp.headers)
+    print("response code %d" % resp.status_code)
+    print("response headers:", resp.headers)
     if len(resp.text) > 0:
         json_response = json.loads(resp.text)
-        rich.print(json.dumps(json_response, indent=3).replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\""))
+        print(json.dumps(json_response, indent=3).replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\""))
 
 
-def sensorthings_delete(baseurl, endpoint, header={}):
+def sensor_things_post(url, data, endpoint="", header={"Content-type": "application/json"}, verbose=False):
     """
-    Gets an object to a a SensorThings API
-    :param baseurl: Service base URL
-    :param endpoint: API endpoint
-    :param data: JSON object
-    :param header: HTTP header
-    :returns: identifier
-    """
-    if not header:
-        header = {"Content-type": "application/json"}
-    if baseurl[-1] != "/":
-        baseurl = baseurl + "/"
-    url = baseurl + endpoint
-    http_response = requests.delete(url, headers=header)
-    if http_response.status_code > 300:
-        print_http_response(http_response)
-        raise ValueError("HTTP ERROR")
-
-
-def sensorthings_post(url, data, endpoint="", header={"Content-type": "application/json"}) -> int:
-    """
-    Posts a JSON object to a SensorThings API
+    Posts a JSON object to a a SensorThings API
     :param url: Service URL
     :param data: dict or string wit the data
     :param endpoint: API endpoint (optional)
     :param header: HTTP header
-    :param: return the element ID
+    :param verbose: prints more info
     """
-    if type(data) is dict or type(data) is list:
+    log.getLogger("requests").setLevel(log.WARNING)
+
+    if type(data) == dict or type(data) == list:
+        if verbose:
+            print("    converting dict/list to string...")
         data = json.dumps(data, indent=2)
-    elif type(data) is str:
+    elif type(data) == str:
         pass
     else:
         raise ValueError("data must be str, list or dict, got %s" % (str(type(data))))
@@ -138,15 +148,21 @@ def sensorthings_post(url, data, endpoint="", header={"Content-type": "applicati
             url = url + "/"
         url += endpoint
 
+    if verbose:
+        print("POSTing to URL", url)
     http_response = requests.post(url, data, headers=header)
+
+    if verbose:
+        print_http_response(http_response)
+
     if http_response.status_code > 300:
         print_http_response(http_response)
         raise ValueError("HTTP ERROR")
 
-    selfLink = http_response.headers["location"]
-    # Extract ID from selfLink and convert it to int
-    element_id = int(selfLink.split("(")[1].replace(")", ""))
-    return element_id
+    if len(http_response.text) < 1:
+        return http_response.headers["location"]
+
+    return http_response.text
 
 
 def sensorthings_get(baseurl, endpoint="", header={"Content-type": "application/json"}):
@@ -165,7 +181,26 @@ def sensorthings_get(baseurl, endpoint="", header={"Content-type": "application/
     if http_response.status_code > 300:
         print_http_response(http_response)
         raise ValueError("HTTP ERROR")
-    return json.loads(http_response.text)
+    json_response = json.loads(http_response.text)
+    return json_response
+
+
+def sensor_things_delete(baseurl, endpoint, header={"Content-type": "application/json"}):
+    """
+    Gets an object to a a SensorThings API
+    :param baseurl: Service base URL
+    :param endpoint: API endpoint
+    :param data: JSON object
+    :param header: HTTP header
+    :returns: identifier
+    """
+    if baseurl[-1] != "/":
+        baseurl = baseurl + "/"
+    url = baseurl + endpoint
+    http_response = requests.delete(url, headers=header)
+    if http_response.status_code > 300:
+        print_http_response(http_response)
+        raise ValueError("HTTP ERROR")
 
 
 class AbstractSensorThings:
@@ -193,15 +228,47 @@ class AbstractSensorThings:
         self.id = None  # @iot.id returned by SensorThings API, if None it has not been registered
         self.selfLink = None  # @iot.selfLink returned by SensorThings API, if None it has not been registered
 
-    def post(self, baseurl, header={}, verbose=False):
+    def post(self, baseurl, endpoint="", header={"Content-type": "application/json; charset=utf-8"}, verbose=False):
         """
         Posts this entity to its appropriate endpoint to register it
         :param baseurl: base url (rest will be generated)
         :return: iot.id value
         """
-        url = self.entity_url(baseurl)
-        self.id = sensorthings_post(url, self.data, header=header)
+        if not endpoint:
+            url = self.entity_url(baseurl)
+        else:
+            url = baseurl + "/" + endpoint
+        if verbose:
+            rich.print("[cyan]sending %s to %s" % (self.type, url))
+
+        data = self.serialize()
+        if verbose:
+            rich.print(f"[blue]{data}")
+        http_response = requests.post(url, data, headers=header)
+        if verbose:
+            print(http_response.text)
+        check_http_status(http_response)
+        self.selfLink = http_response.headers["location"]
+        self.id = self.selfLink.split("(")[1].replace(")", "")
+        if verbose:
+            print("    iot.id %s" % self.id)
+            print("    self link %s" % self.selfLink)
         return self.id
+
+    def post_to(self, url, header={"Content-type": "application/json"}, verbose=False):
+        """
+        Posts this entity to an arbitrary endpoint
+        :param url: full URL
+        :param verbose: prints more info
+        :return: iot.id value
+        """
+        http_response = requests.post(url, self.serialize(string=True), headers=header)
+        check_http_status(http_response)
+        self.selfLink = http_response.headers["location"]
+        self.id = self.selfLink.split("(")[1].replace(")", "")
+        if verbose:
+            print("    iot.id %s" % self.id)
+            print("    iot.selfLink %s" % self.selfLink)
 
     def patch(self):
         """
@@ -217,35 +284,45 @@ class AbstractSensorThings:
         """
         Registers the current element. If the duplicate=True, before posting the element this function will check if
         it has been registered previously. In case it was already registered and update=True, the element will be
-        update (PATCH operation).
+        updated (PATCH operation).
 
 
         :param baseurl: SensorThings API base URL
         :param duplicate: if True (default) checks if there's already a sensor with the same name
-        :param verbose: rich.prints debug info
+        :param verbose: prints debug info
         :param update: if True, when if the element is already
         :return: new element (if registered/updated) or current element (if it already existed)
         """
+        if self.type == "Observation":
+            rich.print(f"[red]Can't register observation! use post instead...")
         if duplicate:  # check if the element has already been registered
-            old_data = self.check_if_registered(baseurl)
-            if old_data:  # element exists
+            current = self.check_if_registered(baseurl)
+            if current:  # element exists
                 if update:
-                    # FROST-Server does not return empty fields, so remove them before comparing
-                    new_data = self.data.copy()
-                    if compare_sta_elements(old_data, new_data):
-                        rich.print(f'Register {self.type} "{self.name}"...already exists, update not required')
-                        return old_data
+                    if compare_sta_elements(current, self.data):
+                        if verbose:
+                            rich.print(f'Register {self.type} "{self.name}"...already exists, update not required')
+                        return current
                     else:
-                        rich.print(f'Register {self.type} "{self.name}"...[yellow]updating element')
+                        if verbose:
+                            rich.print(f'Register {self.type} "{self.name}"...[yellow]updating element')
                         return self.patch()
                 else:
-                    rich.print(f'Register {self.type} "{self.name}"...element already exists, skipping')
-                    return old_data
+                    if verbose:
+                        rich.print(f'Register {self.type} "{self.name}"...element already exists, skipping')
+                    return current
 
-        # If the element was not registered
-        rich.print(f'[cyan]Registering {self.type} "{self.name}"...')
-        resp = self.post(baseurl, verbose=verbose)
-        return resp
+        if verbose:
+            rich.print(f'[cyan]Registering {self.type} "{self.name}"...')
+        try:
+            resp = self.post(baseurl, verbose=verbose)
+        except Exception as e:
+            rich.print(f"[red]Error when inserting {self.type} with name {self.name}")
+            rich.print(self.data)
+            raise e
+
+        self.id = int(resp)
+        return self.id
 
     def check_if_registered(self, baseurl, cache=True):
         """
@@ -256,8 +333,10 @@ class AbstractSensorThings:
 
         if cache and entity_url not in _api_cache.keys():
             url = entity_url + "?$top=10000"
-            registered_elements = sensorthings_get(url)
-            _api_cache[entity_url] = registered_elements
+            http_response = requests.get(url)
+            check_http_status(http_response)
+            registered_elements = json.loads(http_response.text)
+            _api_cache[entity_url] = json.loads(http_response.text)
         else:
             registered_elements = _api_cache[entity_url]
 
@@ -296,8 +375,8 @@ class AbstractSensorThings:
         Prints its internal data structure
         :return: None
         """
-        rich.print("\nType: \"%s\"" % self.type)
-        rich.print(json.dumps(self.data, indent=4))
+        print("\nType: \"%s\"" % self.type)
+        print(json.dumps(self.data, indent=4))
 
     def serialize(self, utf8=False):
         """
@@ -328,13 +407,21 @@ class Thing(AbstractSensorThings):
         :properties: dict with thing's properties
         :locations: list of locations (dicts)
         """
+        log.debug("Creating thing %s..." % name)
         AbstractSensorThings.__init__(self, "Thing", name=name, description=description)
 
         if properties:
             self.data["properties"] = properties
 
-        if locations:
-            self.data["Locations"] = locations
+        log.debug("Thing %s created!" % self.data["name"])
+        locs = []
+        for loc in locations:
+            if type(loc) is int:
+                locs.append({"@iot.id": loc})
+            elif type(loc) is Location and loc.id:
+                locs.append({"@iot.id": loc.id})
+
+        self.data["Locations"] = locs
 
 
 class Sensor(AbstractSensorThings):
@@ -357,7 +444,7 @@ class Sensor(AbstractSensorThings):
 
 
 class ObservedProperty(AbstractSensorThings):
-    def __init__(self, name, description, definition="", properties={}):
+    def __init__(self, name, description, definition, properties={}):
         """
         Generates an ObservedProperty object
         :param name: Sensor's name
@@ -384,10 +471,15 @@ class Datastream(AbstractSensorThings):
         :param sensor: Sensor object
         :param observation_type: observation type definition (url string), by default OM_Measurement
         """
-        assert (type(thing) is Thing or type(thing) is int)
-        assert (type(sensor) is Sensor or type(sensor) is int)
-        assert (type(observed_property) is ObservedProperty or type(observed_property) is int)
         AbstractSensorThings.__init__(self, "Datastream", name=name, description=description)
+
+        __valid_observation_types = ["OM_TruthObservation", "OM_CategoryObservation", "OM_CountObservation",
+                                     "OM_Observation", "OM_Measurement"]
+        if not observation_type:
+            observation_type = "OM_Measurement"
+        assert observation_type in __valid_observation_types, f"observation {observation_type} type not valid"
+        observation_type_url = "http://www.opengis.net/def/observationType/OGC-OM/2.0/" + observation_type
+
         # assign links
         self.sensor = sensor
         self.observed_property = observed_property
@@ -404,27 +496,28 @@ class Datastream(AbstractSensorThings):
         }
         self.data["unitOfMeasurement"] = uom
         self.data["description"] = description
-        if type(sensor) is int:
-            self.data["Sensor"] = {"@iot.id": sensor}
-        else:
+        if type(sensor) == Sensor:
             self.data["Sensor"] = {"@iot.id": sensor.id}
-        if type(observed_property) is int:
-                self.data["ObservedProperty"] = {"@iot.id": observed_property}
-        else:
-            self.data["ObservedProperty"] = {"@iot.id": observed_property.id}
-        if type(thing) is int:
-            self.data["Thing"] = {"@iot.id": thing}
-        else:
+        elif type(sensor) == int:
+            self.data["Sensor"] = {"@iot.id": sensor}
+
+        if type(thing) == Thing:
             self.data["Thing"] = {"@iot.id": thing.id}
+        elif type(sensor) == int:
+            self.data["Thing"] = {"@iot.id": thing}
+
+        if type(observed_property) == ObservedProperty:
+            self.data["ObservedProperty"] = {"@iot.id": observed_property.id}
+        elif type(observed_property) == int:
+            self.data["ObservedProperty"] = {"@iot.id": observed_property}
+
+
         self.data["properties"] = {}
 
-        if observation_type:
-            self.data["observationType"] = observation_type
-        else:
-            self.data["observationType"] = "http://www.opengis.net/def/observationType/OGC-OM/2.0/OM_Measurement"
+        self.data["observationType"] = observation_type_url
 
-        # if "properties" in observed_property.data.keys():
-        #     self.data["properties"] = observed_property.data["properties"]
+        if type(observed_property) == ObservedProperty and  "properties" in observed_property.data.keys():
+            self.data["properties"] = observed_property.data["properties"]
 
         if properties:
             for key, value in properties.items():
@@ -448,12 +541,12 @@ class Datastream(AbstractSensorThings):
 
 
 class FeatureOfInterest(AbstractSensorThings):
-    def __init__(self, name, description, feature, encoding_type="application/vnd.geo+json", properties={}):
+    def __init__(self, name, description, feature, properties={}, encoding_type="application/vnd.geo+json"):
         """
         Generate a Feature Of Interest (FOI) object.
         :param name:  FOI's name
         :param description: FOI's description
-        :param feature: any type of feature
+        :param feature: FOI's
         :param properties: optional dict to include properties in the FOI
         :param encoding_type:
         """
@@ -464,7 +557,7 @@ class FeatureOfInterest(AbstractSensorThings):
 
 
 class Observation(AbstractSensorThings):
-    def __init__(self, phenomenon_time, result, datastream, foi, parameters={}, result_time={}):
+    def __init__(self, phenomenon_time, result, datastream, foi, parameters={}, result_time=""):
         """
         Creates an Observation object
         :param phenomenon_time: The time instant or period of when the Observation happens.
@@ -476,12 +569,25 @@ class Observation(AbstractSensorThings):
         """
         AbstractSensorThings.__init__(self, "Observation")
 
+        if type(datastream) == int:
+            datastream_id = datastream
+        else:
+            datastream_id = datastream.id
+
+        if type(foi) == int:
+            foi_id = foi
+        else:
+            foi_id = foi.id
+
+        if not result_time:
+            result_time = phenomenon_time
+
         self.data = {
             "resultTime": result_time,
             "phenomenonTime": phenomenon_time,
             "result": result,
-            "Datastream": {"@iot.id": datastream.id},
-            "FeatureOfInterest": {"@iot.id": foi.id}
+            "Datastream": {"@iot.id": datastream_id},
+            "FeatureOfInterest": {"@iot.id": foi_id}
         }
         if parameters:
             self.data["resultQuality"] = parameters
@@ -508,8 +614,6 @@ class Location(AbstractSensorThings):
             "depth_units": "meters"
         }
         self.data["encodingType"] = encodingType
-
-
 class HistoricalLocation(AbstractSensorThings):
     def __init__(self, timestamp, location, thing):
         """
@@ -535,25 +639,15 @@ class HistoricalLocation(AbstractSensorThings):
 
 
 class DataArray(AbstractSensorThings):
-    def __init__(self, datastream):
+    def __init__(self):
         """
         Generates a DataArray for a datastream
         :param datastream: Datastream object
         """
-
-        if not isinstance(datastream, Datastream):
-            raise ValueError("Type not valid")
-
-        AbstractSensorThings.__init__(self, "DataArray")
-        self.data = {
-            "Datastream": {"@iot.id": datastream.id},
-            "components": ["phenomenonTime", "result"],
-            "dataArray@iot.count": 0,
-            "dataArray": []
-        }
+        self.arrays = {}
         self.count = 0
 
-    def add_observation(self, timestamp: str, result):
+    def add_observation(self, timestamp: str, result, foi, datastream_id, parameters):
         """
         Adds an observation measure to the data array
         :param timestamp: timestamp
@@ -561,6 +655,40 @@ class DataArray(AbstractSensorThings):
         :return:
         """
         self.count += 1
-        observation = [timestamp, result]
-        self.data["dataArray"].append(observation)
-        self.data["dataArray@iot.count"] = self.count
+        datastream_id = int(datastream_id)
+        if datastream_id not in self.arrays.keys():
+            self.arrays[datastream_id] = {
+                "Datastream": {"@iot.id": datastream_id},
+                "components": ["phenomenonTime", "resultTime", "result",  "FeatureOfInterest/id", "parameters"],
+                "dataArray@iot.count": 0,
+                "dataArray": []
+            }
+
+        self.arrays[datastream_id]["dataArray"].append(
+            [timestamp, timestamp, result, foi, parameters]
+        )
+        self.arrays[datastream_id]["dataArray@iot.count"] = len(self.arrays[datastream_id]["dataArray"])
+
+    def inject(self, url):
+        """
+        Insert accumulated data into the Service
+        :param url:
+        :return:
+        """
+        self.data = [a for a in self.arrays.values()]
+        header = {"Content-type": "application/json; charset=utf-8"}
+        url = url + "/" + "CreateObservations"
+        data = self.serialize()
+        http_response = requests.post(url, data, headers=header)
+        check_http_status(http_response)
+        resp = json.loads(http_response.text)
+        responses = []
+        count = 0
+        for r in resp:
+            if r.startswith("http"):
+                responses.append(int(r.split("(")[1].split(")")[0]))
+            else:
+                responses.append(r)
+                rich.print(f"[red]ERROR in observation {count} of {len(self.count)}: {r}")
+            count += 1
+        return responses

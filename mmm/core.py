@@ -12,29 +12,12 @@ import logging
 
 from mmm import MetadataCollector, CkanClient
 import rich
-
+from mmm.common import load_fields_from_dict
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
 from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream
 from mmm.data_sources import SensorthingsDbConnector
+from mmm.processes import average_process, inference_process
 
-
-def load_fields_from_dict(doc: dict, fields: list) -> dict:
-    """
-    Takes a document from MongoDB and returns all fields in list. If a field in the list is not there, ignore it:
-
-        doc = {"a": 1, "b": 1  "c": 1} and fields = ["a", "b", "d"]
-            return {"a": 1, "b": 1 }
-    :param doc:
-    :param fields:
-    :return:
-    """
-    assert(type(doc) == dict)
-    assert (type(fields) == list)
-    results = {}
-    for field in fields:
-        if field in doc.keys():
-            results[field] = doc[field]
-    return results
 
 
 def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
@@ -276,33 +259,34 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
                 ds.register(url, update=update)
 
+            elif var["dataType"] == "files":
+                ds_name = f"{station}:{sensor_name}:{varname}"
+                units_doc = mc.get_document("units", units)
+                ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
+                properties = {
+                    "dataType": "files"
+                }
+                if "@qualityControl" in var.keys():
+                    qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
+                    properties["qualityControl"] = qc_doc["qartod"]
+
+                ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties,
+                                observation_type="OM_Observation")
+                ds.register(url, update=update)
+
         # Creating average data
         for process in sensor["processes"]:
-            if process["type"] == "average":
-                period = process["parameters"]["period"]
-                for var in sensor["variables"]:
-                    varname = var["@variables"]
-                    if "ignore" in process["parameters"].keys() and varname in process["parameters"]["ignore"]:
-                        rich.print(f"[yellow]Average ignores {varname}...")
-                        continue
-                    units = var["@units"]
-                    data_type = var["dataType"]
-                    obs_prop_id = obs_props_ids[varname]
-                    if var["dataType"] == "timeseries" or var["dataType"] == "profiles":  # creating raw_data timeseries
-                        ds_name = f"{station}:{sensor_name}:{varname}:{period}_average"
-                        ds_full_data_name = f"{station}:{sensor_name}:{varname}:full_data"
-                        units_doc = mc.get_document("units", units)
-                        ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
-                        properties = {
-                            "fullData": False,
-                            "dataType": data_type,
-                            "averagePeriod": period,
-                            "averageFrom": ds_full_data_name
-                        }
+            process = mc.get_document("processes", process["@processes"])
+            params = process["parameters"]
 
-                        ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id,
-                                        properties=properties)
-                        ds.register(url, update=update)
+            if process["type"] == "average":
+                average_process(sensor, process, params, mc, obs_props_ids, sensor_id, thing_id, url, update=update)
+
+            elif process["type"] == "inference":
+                inference_process(sensor, process, mc, obs_props_ids, sensor_id, thing_id, url, update=True)
+            else:
+                rich.print("[red]ERROR: process type not implemented '{process['type']}'")
+                exit(-1)
 
 
 def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: str, sensor_name: str, data_type, average="") -> bool:
@@ -328,7 +312,7 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
     datastreams = db.dict_from_query(f'select "NAME", "ID" from "DATASTREAMS" where "SENSOR_ID" = \'{sensor_id}\';')
 
     # Harcoded solution: name is expected to be station:sensor:variable:processing_type
-    datastream_dict = {}
+
     if data_type == "timeseries":
         rich.print(f"[purple]====> timeseries {sensor_name} <=======")
 

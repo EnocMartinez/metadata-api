@@ -217,48 +217,6 @@ __organizations = {
 # pre-processing (AI-based inference) or post-processing
 # (averaged data)
 
-
-__inference_parameters = {
-    "type": "object",
-    "properties": {
-        "model": {"type": "string"},  # url where the model is published
-        "info": {"type": "string"}  # free-text comment
-    },
-    "required": ["model"]
-}
-
-
-__average_parameters = {
-    "type": "object",
-    "properties": {
-        "period": {"type": "string"},  # period of the average, such as
-        "ignore": __string_list__    # list of variables to ignore in the average (e.g. battery level)
-    },
-    "required": ["period"]
-}
-
-__process_options = {
-    "type": "object",
-    "properties": {
-        "type": {
-            "type": "string",
-            "enum": ["average", "inference"]
-        },
-        "parameters": {"type": "object"}
-    },
-    "required": ["type", "parameters"],
-    "if": {
-        "properties": {"type": {"const": "average"}}
-    },
-    "then": {
-        "properties": {"parameters": __average_parameters},
-    },
-    "else": {
-        "properties": {"parameters": __inference_parameters}
-    }
-}
-
-
 __sensors = {
     "$id": "mmm:sensors",
     "type": "object",
@@ -285,13 +243,39 @@ __sensors = {
                 "required": ["@variables", "@units", "dataType"]
             },
         },
-        "processes": {  # pre-processing or post-processing options
+        "processes": {
             "type": "array",
-            "minItems": 0,
-            "items": __process_options
+            "items": {
+                "type": "object",
+                "properties": {
+                    "@processes": {"type": "string"},
+                    "parameters": {"type": "object"}
+                },
+                "required": ["parameters", "@processes"]
+            }
+        },
+        "@processes": {  # pre-processing or post-processing options
+            "type": "array",
+            "items": {
+                "type": "string"
+            }
         }
     },
-    "required": ["description", "shortName", "longName", "serialNumber", "instrumentType", "model", "manufacturer", "processes"]
+    "required": ["description", "shortName", "longName", "serialNumber", "instrumentType", "model", "manufacturer",
+                 "processes"]
+}
+
+
+# Processes are a rather open structure, only type and info are required, but many other can be passes as optional
+# parameters.
+__processes = {
+    "$id": "mmm:datasets",
+    "type": "object",
+    "properties": {
+        "type": {"type": "string", "enum": ["average", "inference"]},
+        "description": {"type": "string"}
+    },
+    "required": ["type", "description"]
 }
 
 __stations = {
@@ -315,6 +299,7 @@ __stations = {
     },
     "required": ["shortName", "longName", "platformType", "deployment", "contacts"]
 }
+
 
 __datasets = {
     "$id": "mmm:datasets",
@@ -516,5 +501,6 @@ mmm_schemas = {
     "operations": __operations,
     "activities": __activities,
     "projects": __projects,
+    "processes": __processes,
     # "resources": {}
 }

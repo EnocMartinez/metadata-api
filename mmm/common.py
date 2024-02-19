@@ -216,3 +216,21 @@ def run_subprocess(cmd, fail_exit=False):
         return False
     return True
 
+
+def load_fields_from_dict(doc: dict, fields: list) -> dict:
+    """
+    Takes a document from MongoDB and returns all fields in list. If a field in the list is not there, ignore it:
+
+        doc = {"a": 1, "b": 1  "c": 1} and fields = ["a", "b", "d"]
+            return {"a": 1, "b": 1 }
+    :param doc:
+    :param fields:
+    :return:
+    """
+    assert(type(doc) == dict)
+    assert (type(fields) == list)
+    results = {}
+    for field in fields:
+        if field in doc.keys():
+            results[field] = doc[field]
+    return results
