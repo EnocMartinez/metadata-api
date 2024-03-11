@@ -10,7 +10,7 @@ created: 4/10/23
 """
 
 from argparse import ArgumentParser
-from mmm import DataCollector, MetadataCollector, SensorthingsDbConnector, setup_log
+from mmm import DataCollector, SensorthingsDbConnector, setup_log
 import yaml
 import rich
 import pandas as pd
@@ -108,7 +108,8 @@ if __name__ == "__main__":
     argparser.add_argument("-t", "--time-range", help="Time range with ISO notation, like 2022-01-01/2023-01-01",
                            type=str, required=False, default="2022-01-01/2023-01-01")
 
-    argparser.add_argument("-p", "--period", help="period to generate files, 'day', 'month' or 'year'. If not se a single big file will be generated", type=str,
+    argparser.add_argument("-p", "--period", help="period to generate files, 'day', 'month' or 'year'. If not set a "
+                                                  "single big file will be generated", type=str,
                            required=False, default="")
     argparser.add_argument("-c", "--csv-file", help="import data from input csv file", type=str, required=False,
                            default="")

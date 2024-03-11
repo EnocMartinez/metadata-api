@@ -553,7 +553,7 @@ def slice_dataframes(df, max_rows=-1, frequency=""):
 
     # ensure that we do not have empty dataframes
     dataframes = [df for df in dataframes if not df.empty]
-
+    rich.print("[green]sliced!")
     return dataframes
 
 

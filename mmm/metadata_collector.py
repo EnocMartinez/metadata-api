@@ -318,7 +318,7 @@ class MetadataCollector:
         if len(documents) > 1:
             raise AssertionError(f"Got {n} multiple documents in collection {collection} with #id = '{document_id}'")
         elif len(documents) == 0:
-            raise LookupError(f"Element {collection} with  filter {json.dumps(filter)} not found")
+            raise LookupError(f"Element {collection} with   with #id = '{document_id}' not found")
 
         return strip_mongo_ids(documents[0])
 

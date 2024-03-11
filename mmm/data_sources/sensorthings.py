@@ -21,6 +21,7 @@ from rich.progress import Progress
 import time
 import os
 import gc
+from mmm.data_sources.api import sensorthings_post, sensorthings_get
 
 
 def varname_from_datastream(ds_name):
@@ -262,12 +263,10 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         self.__sensor_properties = dataframe_to_dict(df, "NAME", "PROPERTIES")
         return self.__sensor_properties
 
-
     def get_datastream_sensor(self, fields=["ID", "SENSOR_ID"]):
         select_fields = ", ".join(fields)
         df = self.dataframe_from_query(f'select {select_fields} from "DATASTREAMS";')
         return dataframe_to_dict(df, "NAME", "SENSOR_ID")
-
 
     def get_datastream_properties(self, fields=["ID", "PROPERTIES"]):
         select_fields = f'"{fields[0]}"'
@@ -314,7 +313,6 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         df.sort_index(inplace=True)
         return df
 
-
     def get_data(self, identifier, time_start: str, time_end: str):
         """
         Access the 0BSERVATIONS data table and exports all data between time_start and time_end
@@ -360,8 +358,8 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         df, _ = varname_from_datastream_dataframe(df, self.datastream_id_name[datastream_id])
         return df
 
-    def get_dataset(self, sensor:str, station_name:str, options: dict, time_start: pd.Timestamp, time_end:pd.Timestamp, variables: list=[])\
-            -> pd.DataFrame:
+    def get_dataset(self, sensor:str, station_name:str, options: dict, time_start: pd.Timestamp, time_end:pd.Timestamp,
+                    variables: list=[])-> pd.DataFrame:
         """
         Gets all data from a sensor deployed at a certain station from time_start to time_end. If variables is specified
         only a subset of variables will be returned.
@@ -466,7 +464,11 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         """
         self.exec_query(query, debug=debug)
         response = self.cursor.fetchall()
-        return response[0][0]
+        try:
+            r = response[0][0]
+        except IndexError:
+            raise LookupError("query produced no results")
+        return r
 
     def inject_to_timeseries(self, df, datastreams, max_rows=100000, disable_triggers=False,
                              tmp_folder="/tmp/sta_db_copy/data"):
@@ -513,6 +515,125 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         if self.host != "localhost" and self.host != "127.0.0.1":
             rm_remote_files(self.host, files)
 
+    def inject_to_detections(self, df, max_rows=100000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data"):
+        """
+        Inject all data in df into the timeseries table via SQL copy
+        """
+
+        init = time.time()
+        os.makedirs(tmp_folder, exist_ok=True)
+        os.chown(tmp_folder, os.getuid(), os.getgid())
+
+        rich.print("Splitting input dataframe into smaller ones")
+        rows = int(max_rows)
+        dataframes = slice_dataframes(df, max_rows=rows)
+        files = self.dataframes_to_detections_csv(dataframes, tmp_folder)
+        rich.print("Generating all files took %0.02f seconds" % (time.time() - init))
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            t = time.time()
+            rich.print("rsync files to remote server...", end="")
+            rsync_files(self.host, tmp_folder, files)
+            rich.print(f"[green]done![/green] took {time.time() - t:.02f} s")
+
+        if disable_triggers:
+            self.disable_all_triggers()
+
+        with Progress() as progress:
+            task1 = progress.add_task("SQL COPY to profiles hypertable...", total=len(dataframes))
+            for file in files:
+                self.sql_copy_csv(file, "detections")
+                progress.advance(task1, advance=1)
+
+        if disable_triggers:
+            self.enable_all_triggers()
+
+        with Progress() as progress:
+            task1 = progress.add_task("remove temp files...", total=len(dataframes))
+            for file in files:
+                os.remove(file)
+                progress.advance(task1, advance=1)
+
+        rich.print("[magenta]Inserting all detections via SQL COPY took %.02f seconds" % (time.time() - init))
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            rm_remote_files(self.host, files)
+
+    def inject_to_files(self, df, max_rows=10000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data"):
+        """
+        Inject all data in df into the timeseries table via SQL copy
+        """
+
+        init = time.time()
+        os.makedirs(tmp_folder, exist_ok=True)
+        os.chown(tmp_folder, os.getuid(), os.getgid())
+
+        rich.print("Splitting input dataframe into smaller ones")
+        rows = int(max_rows)
+        dataframes = slice_dataframes(df, max_rows=rows)
+        files = self.dataframes_to_files_csv(dataframes, tmp_folder)
+        rich.print("Generating all files took %0.02f seconds" % (time.time() - init))
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            t = time.time()
+            rich.print("rsync files to remote server...", end="")
+            rsync_files(self.host, tmp_folder, files)
+            rich.print(f"[green]done![/green] took {time.time() - t:.02f} s")
+
+        with Progress() as progress:
+            task1 = progress.add_task("SQL COPY to OBSERVATIONS ...", total=len(dataframes))
+            for file in files:
+                self.sql_copy_csv(file, "OBSERVATIONS")
+                progress.advance(task1, advance=1)
+
+        with Progress() as progress:
+            task1 = progress.add_task("remove temp files...", total=len(dataframes))
+            for file in files:
+                os.remove(file)
+                progress.advance(task1, advance=1)
+
+        rich.print("[magenta]Inserting all detections via SQL COPY took %.02f seconds" % (time.time() - init))
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            rm_remote_files(self.host, files)
+
+    def inject_to_inference(self, df, max_rows=10000, tmp_folder="/tmp/sta_db_copy/data"):
+        """
+        Inject all data in df into the timeseries table via SQL copy
+        """
+
+        init = time.time()
+        os.makedirs(tmp_folder, exist_ok=True)
+        os.chown(tmp_folder, os.getuid(), os.getgid())
+
+        rich.print("Splitting input dataframe into smaller ones")
+        rows = int(max_rows)
+        dataframes = slice_dataframes(df, max_rows=rows)
+        files = self.dataframes_to_inference_csv(dataframes, tmp_folder)
+        rich.print("Generating all files took %0.02f seconds" % (time.time() - init))
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            t = time.time()
+            rich.print("rsync files to remote server...", end="")
+            rsync_files(self.host, tmp_folder, files)
+            rich.print(f"[green]done![/green] took {time.time() - t:.02f} s")
+
+        with Progress() as progress:
+            task1 = progress.add_task("SQL COPY to OBSERVATIONS ...", total=len(dataframes))
+            for file in files:
+                self.sql_copy_csv(file, "OBSERVATIONS")
+                progress.advance(task1, advance=1)
+
+        with Progress() as progress:
+            task1 = progress.add_task("remove temp files...", total=len(dataframes))
+            for file in files:
+                os.remove(file)
+                progress.advance(task1, advance=1)
+
+        rich.print("[magenta]Inserting all detections via SQL COPY took %.02f seconds" % (time.time() - init))
+
+        if self.host != "localhost" and self.host != "127.0.0.1":
+            rm_remote_files(self.host, files)
 
     def inject_to_profiles(self, df, datastreams, max_rows=100000, disable_triggers=False,
                            tmp_folder="/tmp/sta_db_copy/data"):
@@ -559,7 +680,6 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         if self.host != "localhost" and self.host != "127.0.0.1":
             rm_remote_files(self.host, files)
 
-
     def inject_to_observations(self, df: pd.DataFrame, datastreams: dict, url: str, foi_id: int, avg_period: str,
                                max_rows=10000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data",
                                profile=False):
@@ -569,7 +689,12 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         init = time.time()
         os.makedirs(tmp_folder, exist_ok=True)
         os.chown(tmp_folder, os.getuid(), os.getgid())
-        rich.print("POSTing the first row to get the Feature ID")
+        if foi_id == -1:
+            # We need to insert the first row using the API, so SensorThings will automatically generate the FOI
+            rich.print("POSTing the first row to get the Feature ID")
+            # feature_id = self.post_via_api(df, api_url, df.iloc[0], column_mapper, avg_period=avg_period)
+            foi_id = self.post_via_api(df, url, df.iloc[0], datastreams, avg_period=avg_period, parameters={})
+            df = df.iloc[1:-1]
 
         rich.print("Splitting input dataframe into smaller ones")
         rows = int(max_rows / len(datastreams))
@@ -614,11 +739,14 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         """
         files = []
         i = 0
-        for dataframe in dataframes:
-            file = os.path.join(folder, f"observations_copy_{i:04d}.csv")
-            i += 1
-            self.format_csv_sta(dataframe, column_mapper, file, feature_id, avg_period=avg_period, profile=profile)
-            files.append(file)
+        with Progress() as progress:
+            task = progress.add_task("converting dataframes to OBSERVATIONS csv", total=len(dataframes))
+            for dataframe in dataframes:
+                progress.advance(task, 1)
+                file = os.path.join(folder, f"observations_copy_{i:04d}.csv")
+                i += 1
+                self.format_csv_sta(dataframe, column_mapper, file, feature_id, avg_period=avg_period, profile=profile)
+                files.append(file)
 
         return files
 
@@ -628,13 +756,62 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         """
         i = 0
         files = []
-        for dataframe in dataframes:
-            file = os.path.join(folder, f"timeseries_copy_{i:04d}.csv")
-            i += 1
-            rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
-            self.format_timeseries_csv(dataframe, column_mapper, file)
-            files.append(file)
+        with Progress() as progress:
+            task = progress.add_task("converting data to timeseries csv", total=len(dataframes))
+            for dataframe in dataframes:
+                progress.advance(task, 1)
+                file = os.path.join(folder, f"timeseries_copy_{i:04d}.csv")
+                i += 1
+                rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
+                self.format_timeseries_csv(dataframe, column_mapper, file)
+                files.append(file)
         return files
+
+    def dataframes_to_detections_csv(self, dataframes: list, folder: str):
+        """
+        Write dataframes into local csv files ready for sql copy following the syntax in table OBSERVATIONS
+        """
+        i = 0
+        files = []
+        with Progress() as progress:
+            task = progress.add_task("converting data to detections csv", total=len(dataframes))
+            for dataframe in dataframes:
+                progress.advance(task, 1)
+                file = os.path.join(folder, f"timeseries_copy_{i:04d}.csv")
+                i += 1
+                rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
+                self.format_detections_csv(dataframe, file)
+                files.append(file)
+        return files
+
+    def dataframes_to_files_csv(self, dataframes:list, folder):
+        i = 0
+        files = []
+        with Progress() as progress:
+            task = progress.add_task("converting data to 'files' csv", total=len(dataframes))
+            for dataframe in dataframes:
+                progress.advance(task, 1)
+                file = os.path.join(folder, f"files_copy_{i:04d}.csv")
+                i += 1
+                rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
+                self.format_files_csv(dataframe, file)
+                files.append(file)
+        return files
+
+    def dataframes_to_inference_csv(self, dataframes:list, folder):
+        i = 0
+        files = []
+        with Progress() as progress:
+            task = progress.add_task("converting data to 'inference' csv", total=len(dataframes))
+            for dataframe in dataframes:
+                progress.advance(task, 1)
+                file = os.path.join(folder, f"files_copy_{i:04d}.csv")
+                i += 1
+                rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
+                self.format_inference_csv(dataframe, file)
+                files.append(file)
+        return files
+
 
     def dataframes_to_profile_csv(self, dataframes: list, column_mapper: dict, folder: str):
         """
@@ -642,12 +819,15 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         """
         i = 0
         files = []
-        for dataframe in dataframes:
-            file = os.path.join(folder, f"profile_copy_{i:04d}.csv")
-            i += 1
-            rich.print(f"format profile CSV {i:04d} of {len(dataframes)}")
-            self.format_profile_csv(dataframe, column_mapper, file)
-            files.append(file)
+        with Progress() as progress:
+            task = progress.add_task("converting data to profiles csv", total=len(dataframes))
+            for dataframe in dataframes:
+                progress.advance(task, 1)
+                file = os.path.join(folder, f"profile_copy_{i:04d}.csv")
+                i += 1
+                rich.print(f"format profile CSV {i:04d} of {len(dataframes)}")
+                self.format_profile_csv(dataframe, column_mapper, file)
+                files.append(file)
         return files
 
     def format_csv_sta(self, df_in, column_mapper, filename, feature_id, avg_period: str = "", profile=False):
@@ -664,7 +844,6 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         init = False
         if self.__last_observation_index < 0:  # not initialized
             self.__last_observation_index = self.get_last_observation_id()
-
         for colname, datastream_id in column_mapper.items():
             if colname not in df_in.columns:
                 continue
@@ -740,9 +919,9 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
                         df["RESULT_QUALITY"].values[i] = "{\"stdev\": %d}" % (df[colname + "_std"].values[i])
 
             if profile:
-                df["depth"] = df["depth"].values.astype(int)  # force conversion to integer
+                df["depth"] = df["depth"].values.astype(float).round(2)  # force conversion to integer
                 for i in range(0, len(df.index.values)):
-                    df["PARAMETERS"].values[i] = "{\"depth\": %d}" % (df["depth"].values[i])
+                    df["PARAMETERS"].values[i] = "{\"depth\": %.02f}" % (df["depth"].values[i])
 
             del df["timestamp"]
             del df[colname]
@@ -824,6 +1003,132 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         df_final.to_csv(filename)
         del df_final
         gc.collect()
+
+    def format_detections_csv(self, df_in, filename):
+        """
+        Format from a regular dataframe to a Dataframe ready to be copied into a TimescaleDB simple table
+        :param df_in:
+        :param filename:
+        :return:
+        """
+        df = df_in.copy(deep=True)
+        df = df.rename(columns={"results": "value"})
+        df["timestamp"] = df.index.values
+        df = df.dropna(how="any")
+        df = df[["timestamp", "value", "datastream_id"]]
+        df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        df = df.set_index("time")
+        df["value"] = df["value"].values.astype(int)
+        del df["timestamp"]
+        df.to_csv(filename)
+        del df
+        gc.collect()
+
+    def format_files_csv(self, df_in, filename):
+        """
+        Takes a dataframe and arranges it accordingly to the OBSERVATIONS table from a SensorThings API, preparing the
+        data to be inserted by a COPY statement
+        :param df_in: input dataframe
+        :param column_mapper: structure that maps datastreams with dataframe columns
+        :param filename: name of the file to be generated
+        :param feature_id: ID of the FeatureOfInterst
+        :param avg_period: if set, the phenomenon time end will be timestamp + avg_period to generate a timerange.
+                           used in averaged data.
+        """
+        if self.__last_observation_index < 0:  # not initialized
+            self.__last_observation_index = self.get_last_observation_id()
+
+        df = df_in.copy(deep=True)
+
+        df["PHENOMENON_TIME_START"] = np.datetime_as_string(df.index.values, unit="s", timezone="UTC")
+        if "timeEnd" in df.columns:  # if we have the average period
+            df["PHENOMENON_TIME_END"] = np.datetime_as_string(df["timeEnd"], unit="s", timezone="UTC")
+        else:
+            df["PHENOMENON_TIME_END"] = df["PHENOMENON_TIME_START"]
+        df["RESULT_TIME"] = df["PHENOMENON_TIME_START"]
+        df["RESULT_TYPE"] = 3  # Strings are type 3 (2 is json)
+        df["RESULT_NUMBER"] = np.nan
+        df["RESULT_BOOLEAN"] = np.nan
+        df["RESULT_JSON"] = np.nan
+        df["RESULT_STRING"] = df["results"].astype(str)
+        df["RESULT_QUALITY"] = np.nan
+        df["VALID_TIME_START"] = np.nan
+        df["VALID_TIME_END"] = np.nan
+        if "parameters" in df.columns:
+            df["PARAMETERS"] = df["parameters"]
+        else:
+            df["PARAMETERS"] = np.nan
+        df["DATASTREAM_ID"] = df["datastream_id"]
+        df["FEATURE_ID"] = df["foi_id"]
+        df["ID"] = np.arange(0, len(df.index.values), dtype=int) + self.__last_observation_index + 1
+        self.__last_observation_index = df["ID"].values[-1]
+
+        # Keep only columns as in the Database
+
+        df = df[["PHENOMENON_TIME_START", "PHENOMENON_TIME_END", "RESULT_TIME", "RESULT_TYPE", "RESULT_NUMBER",
+                 "RESULT_BOOLEAN", "RESULT_JSON", "RESULT_STRING", "RESULT_QUALITY", "VALID_TIME_START",
+                 "VALID_TIME_END", "PARAMETERS", "DATASTREAM_ID",  "FEATURE_ID", "ID"]]
+        df.to_csv(filename, index=False)
+
+    def format_inference_csv(self, df_in, filename):
+        """
+        Takes a dataframe and arranges it accordingly to the OBSERVATIONS table from a SensorThings API, preparing the
+        data to be inserted by a COPY statement
+        :param df_in: input dataframe
+        :param column_mapper: structure that maps datastreams with dataframe columns
+        :param filename: name of the file to be generated
+        :param feature_id: ID of the FeatureOfInterst
+        :param avg_period: if set, the phenomenon time end will be timestamp + avg_period to generate a timerange.
+                           used in averaged data.
+        """
+        if self.__last_observation_index < 0:  # not initialized
+            self.__last_observation_index = self.get_last_observation_id()
+
+        df = df_in.copy(deep=True)
+
+        df["PHENOMENON_TIME_START"] = np.datetime_as_string(df.index.values, unit="s", timezone="UTC")
+        if "timeEnd" in df.columns:  # if we have the average period
+            df["PHENOMENON_TIME_END"] = np.datetime_as_string(df["timeEnd"], unit="s", timezone="UTC")
+        else:
+            df["PHENOMENON_TIME_END"] = df["PHENOMENON_TIME_START"]
+        df["RESULT_TIME"] = df["PHENOMENON_TIME_START"]
+        df["RESULT_TYPE"] = 2  # Strings are type 3 (2 is json)
+        df["RESULT_NUMBER"] = np.nan
+        df["RESULT_BOOLEAN"] = np.nan
+        values = []
+        for v in df["results"].values:
+            # Force JSON structures to be like: "{\"key\": \"value\"}"
+            v = v.replace("'", "\"")
+            v = v.replace("\"", "\\\"")
+            values.append("\"" + v + "\"")
+
+        df["RESULT_JSON"] = values
+        df["RESULT_STRING"] = np.nan
+        df["RESULT_QUALITY"] = np.nan
+        df["VALID_TIME_START"] = np.nan
+        df["VALID_TIME_END"] = np.nan
+        if "parameters" in df.columns:
+            values = []
+            for v in df["parameters"].values:
+                # Force JSON structures to be like: "{\"key\": \"value\"}"
+                v = v.replace("'", "\"")
+                v = v.replace("\"", "\\\"")
+                values.append("\"" + v + "\"")
+
+            df["PARAMETERS"] = values
+        else:
+            df["PARAMETERS"] = np.nan
+        df["DATASTREAM_ID"] = df["datastream_id"]
+        df["FEATURE_ID"] = df["foi_id"]
+        df["ID"] = np.arange(0, len(df.index.values), dtype=int) + self.__last_observation_index + 1
+        self.__last_observation_index = df["ID"].values[-1]
+
+        # Keep only columns as in the Database
+
+        df = df[["PHENOMENON_TIME_START", "PHENOMENON_TIME_END", "RESULT_TIME", "RESULT_TYPE", "RESULT_NUMBER",
+                 "RESULT_BOOLEAN", "RESULT_JSON", "RESULT_STRING", "RESULT_QUALITY", "VALID_TIME_START",
+                 "VALID_TIME_END", "PARAMETERS", "DATASTREAM_ID",  "FEATURE_ID", "ID"]]
+        df.to_csv(filename, index=False)
 
     def sql_copy_csv(self, filename, table="OBSERVATIONS", delimiter=","):
         """

@@ -87,7 +87,7 @@ class TimescaleDB(LoggerSuperclass):
         query = """
         CREATE TABLE {table_name} (
         timestamp TIMESTAMPTZ NOT NULL,
-        depth smallint,
+        depth DOUBLE PRECISION NOT NULL,
         value DOUBLE PRECISION NOT NULL,   
         qc_flag INT8,
         datastream_id smallint NOT NULL,

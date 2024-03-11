@@ -123,7 +123,7 @@ def print_http_response(resp):
         print(json.dumps(json_response, indent=3).replace("\\n", "\n").replace("\\t", "\t").replace("\\\"", "\""))
 
 
-def sensor_things_post(url, data, endpoint="", header={"Content-type": "application/json"}, verbose=False):
+def sensorthings_post(url, data, endpoint="", header={"Content-type": "application/json"}, verbose=False):
     """
     Posts a JSON object to a a SensorThings API
     :param url: Service URL
@@ -295,6 +295,7 @@ class AbstractSensorThings:
         """
         if self.type == "Observation":
             rich.print(f"[red]Can't register observation! use post instead...")
+
         if duplicate:  # check if the element has already been registered
             current = self.check_if_registered(baseurl)
             if current:  # element exists
@@ -315,7 +316,7 @@ class AbstractSensorThings:
         if verbose:
             rich.print(f'[cyan]Registering {self.type} "{self.name}"...')
         try:
-            resp = self.post(baseurl, verbose=verbose)
+            resp = self.post(baseurl, verbose=False)
         except Exception as e:
             rich.print(f"[red]Error when inserting {self.type} with name {self.name}")
             rich.print(self.data)
@@ -396,32 +397,6 @@ class AbstractSensorThings:
         """
         with open(filename, "w") as f:
             f.write(self.serialize(self.data))
-
-
-class Thing(AbstractSensorThings):
-    def __init__(self, name, description, properties={}, locations=[]):
-        """
-        Generates a Thing
-        :param name: Thing's name
-        :param description: Thing's short description
-        :properties: dict with thing's properties
-        :locations: list of locations (dicts)
-        """
-        log.debug("Creating thing %s..." % name)
-        AbstractSensorThings.__init__(self, "Thing", name=name, description=description)
-
-        if properties:
-            self.data["properties"] = properties
-
-        log.debug("Thing %s created!" % self.data["name"])
-        locs = []
-        for loc in locations:
-            if type(loc) is int:
-                locs.append({"@iot.id": loc})
-            elif type(loc) is Location and loc.id:
-                locs.append({"@iot.id": loc.id})
-
-        self.data["Locations"] = locs
 
 
 class Sensor(AbstractSensorThings):
@@ -594,8 +569,8 @@ class Observation(AbstractSensorThings):
 
 
 class Location(AbstractSensorThings):
-    def __init__(self, name: str, description: str, latitude: float, longitude: float, depth: float,
-                 encodingType="application/vnd.geo+json"):
+    def __init__(self, name: str, description: str, latitude: float, longitude: float, depth: float,  things=[],
+                 encodingType="application/geo+json"):
         """
         Generates a location
         :param type: location type, usually Polygon or Point
@@ -614,6 +589,15 @@ class Location(AbstractSensorThings):
             "depth_units": "meters"
         }
         self.data["encodingType"] = encodingType
+        self.data["Things"] = []
+        if things:
+            for t in things:
+                if type(t) is int:
+                    self.data["Things"].append({"@iot.id": t})
+                elif type(t) is Thing:
+                    self.data["Things"].append({"@iot.id": t.id})
+
+
 class HistoricalLocation(AbstractSensorThings):
     def __init__(self, timestamp, location, thing):
         """
@@ -637,6 +621,31 @@ class HistoricalLocation(AbstractSensorThings):
             "Thing": {"@iot.id": thing.id},
         }
 
+
+class Thing(AbstractSensorThings):
+    def __init__(self, name, description, properties={}, locations=[]):
+        """
+        Generates a Thing
+        :param name: Thing's name
+        :param description: Thing's short description
+        :properties: dict with thing's properties
+        :locations: list of locations (dicts)
+        """
+        log.debug("Creating thing %s..." % name)
+        AbstractSensorThings.__init__(self, "Thing", name=name, description=description)
+
+        if properties:
+            self.data["properties"] = properties
+
+        log.debug("Thing %s created!" % self.data["name"])
+        locs = []
+        for loc in locations:
+            if type(loc) is int:
+                locs.append({"@iot.id": loc})
+            elif type(loc) is Location and loc.id:
+                locs.append({"@iot.id": loc.id})
+
+        self.data["Locations"] = locs
 
 class DataArray(AbstractSensorThings):
     def __init__(self):

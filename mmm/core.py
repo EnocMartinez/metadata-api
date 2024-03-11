@@ -19,7 +19,6 @@ from mmm.data_sources import SensorthingsDbConnector
 from mmm.processes import average_process, inference_process
 
 
-
 def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
     """
     Propagates metadata in MongoDB to CKAN
@@ -154,19 +153,17 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
     things_ids = {}
     location_ids = {}
     obs_props_ids = {}
+    sensors = mc.get_documents("sensors")
     if "sensors" in collections:
-        sensors = mc.get_documents("sensors")
         for doc in sensors:
             sensor_id = doc["#id"]
-            rich.print(f"Processing sensor {sensor_id}")
-
             name = doc["#id"]
             description = doc["description"]
 
             keys = ["longName", "serialNumber", "instrumentType", "manufacturer", "model"]
             properties = get_properties(doc, keys)
             s = Sensor(name, description, metadata="", properties=properties)
-            s.register(url, update=update)
+            s.register(url, update=update, verbose=True)
             sensor_ids[sensor_id] = s.id
 
     if "variables" in collections:
@@ -179,7 +176,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 "standard_name": doc["standard_name"]
             }
             o = ObservedProperty(name, description, definition, properties=prop)
-            o.register(url, update=update)
+            o.register(url, update=update, verbose=True)
             obs_props_ids[name] = o.id
 
     if "stations" in collections:
@@ -194,8 +191,6 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
             lat = prop["deployment"]["coordinates"]["latitude"]
             lon = prop["deployment"]["coordinates"]["longitude"]
             depth = prop["deployment"]["coordinates"]["depth"]
-            location = Location(loc_name, loc_description, lat, lon, depth)
-            location.register(url)
 
             # Register FeatureOfInterest
             foi_name = name
@@ -209,14 +204,17 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 "depth_units": "meters"
             }
             foi = FeatureOfInterest(foi_name, foi_description, feature, properties=properties)
-            foi.register(url)
+            foi.register(url, verbose=True)
 
             # Register Thing
             description = doc["longName"]
-            t = Thing(name, description, properties=prop, locations=[{"@iot.id": location.id}])
-            t.register(url, update=update)
+            t = Thing(name, description, properties=prop)
+            t.register(url, update=update, verbose=True)
             things_ids[name] = t.id
-        
+
+            location = Location(loc_name, loc_description, lat, lon, depth, things=[t.id])
+            location.register(url, verbose=True)
+
     for sensor in sensors:
         rich.print(f"Creating Datastreams for sensor {sensor['#id']}")
         sensor_name = sensor["#id"]
@@ -242,7 +240,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                     properties["qualityControl"] = qc_doc["qartod"]
 
                 ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
-                ds.register(url, update=update)
+                ds.register(url, update=update, verbose=True)
 
             elif var["dataType"] == "profiles":  # creating profile data
                 ds_name = f"{station}:{sensor_name}:{varname}:full_data"
@@ -257,7 +255,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                     properties["qualityControl"] = qc_doc["qartod"]
 
                 ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
-                ds.register(url, update=update)
+                ds.register(url, update=update, verbose=True)
 
             elif var["dataType"] == "files":
                 ds_name = f"{station}:{sensor_name}:{varname}"
@@ -272,12 +270,15 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
 
                 ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties,
                                 observation_type="OM_Observation")
-                ds.register(url, update=update)
+                ds.register(url, update=update, verbose=True)
 
         # Creating average data
-        for process in sensor["processes"]:
-            process = mc.get_document("processes", process["@processes"])
-            params = process["parameters"]
+        for sensor_process in sensor["processes"]:
+            process = mc.get_document("processes", sensor_process["@processes"])
+            params = sensor_process["parameters"]
+            station = sensor["deployment"]["@stations"]
+            sensor_id = sensor_ids[sensor_name]
+            thing_id = things_ids[station]
 
             if process["type"] == "average":
                 average_process(sensor, process, params, mc, obs_props_ids, sensor_id, thing_id, url, update=update)
@@ -285,11 +286,12 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
             elif process["type"] == "inference":
                 inference_process(sensor, process, mc, obs_props_ids, sensor_id, thing_id, url, update=True)
             else:
-                rich.print("[red]ERROR: process type not implemented '{process['type']}'")
+                rich.print(f"[red]ERROR: process type not implemented '{process['type']}'")
                 exit(-1)
 
 
-def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: str, sensor_name: str, data_type, average="") -> bool:
+def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: str, sensor_name: str, data_type,
+                   average="") -> bool:
     """
     This function performs a bulk load of the data contained in the input file
     """
@@ -304,18 +306,28 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         raise ValueError("Invalid extension")
     rich.print("[green]done")
 
+    if df.empty:
+        raise ValueError("Empty dataframe!")
+
     db = SensorthingsDbConnector(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
                                  psql_conf["password"], logging.getLogger())
 
     # Get the datastream names
     sensor_id = db.value_from_query(f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';')
     datastreams = db.dict_from_query(f'select "NAME", "ID" from "DATASTREAMS" where "SENSOR_ID" = \'{sensor_id}\';')
+    q = f'select "NAME" as name, "PROPERTIES"->>\'dataType\' as data_type from "DATASTREAMS" where "SENSOR_ID" = {sensor_id};'
+    datastream_type = db.dict_from_query(q)
 
-    # Harcoded solution: name is expected to be station:sensor:variable:processing_type
+    q = '''    
+        select "DATASTREAMS"."NAME" as datastream, prop."NAME" AS variable from "DATASTREAMS"
+        left join (select * from "OBS_PROPERTIES") as prop	
+        on prop."ID" = "DATASTREAMS"."OBS_PROPERTY_ID";
+    '''
+    datastream_variables = db.dict_from_query(q)  # dict with key=datastream_name, value=variable_name
 
-    if data_type == "timeseries":
+    # Hardcoded solution: name is expected to be station:sensor:variable:processing_type
+    if data_type == "timeseries" and not average:
         rich.print(f"[purple]====> timeseries {sensor_name} <=======")
-
         # Keep elements with full data
         df = drop_duplicated_indexes(df)
         datastreams = {key: value for key, value in datastreams.items() if key.endswith("full_data")}
@@ -330,19 +342,42 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         datastreams = {key: value for key, value in datastreams.items() if key.endswith(f"{average}_average")}
         datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
 
+        if len(datastreams) < 1:
+            raise ValueError("No datastreams found for this dataset!")
+
         rich.print(f"station name: {station_name}")
+
         foi_id = db.value_from_query(f'select "ID" from "FEATURES" where "NAME" = \'{station_name}\';')
-        rich.print(datastreams)
         db.inject_to_observations(df, datastreams, url, foi_id, average, profile=True)
 
-    elif data_type == "profiles":
+    elif data_type == "profiles" and not average:
         rich.print(f"[purple]====> profile  {sensor_name} <=======")
         datastreams = {key: value for key, value in datastreams.items() if key.endswith("full_data")}
         datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
         rich.print("[green]start data bulk load")
         db.inject_to_profiles(df, datastreams)
 
-    else:
+    elif data_type == "detections":
+        rich.print(f"[purple]====> Detections  {sensor_name} <=======")
+        rich.print("[green]start data bulk load")
+        db.inject_to_files(df)
+
+    elif data_type == "files":
+        rich.print(f"[purple]====> Files  {sensor_name} <=======")
+        # Detections should already include datastreams
+
+        # datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
+        rich.print("[green]start data bulk load")
+        db.inject_to_files(df)
+
+    elif data_type == "inference":
+        rich.print(f"[purple]====> Inference  {sensor_name} <=======")
+        # Detections should already include datastreams
+        # datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
+        rich.print("[green]start data bulk load")
+        db.inject_to_inference(df)
+
+    elif data_type == "timeseries" and average:
         rich.print(f"[purple]====> average {sensor_name}<=======")
         rich.print(f"looking for elements with '{average}' average period")
         rich.print(f"looking for {average} averaged elements")
@@ -356,3 +391,7 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         rich.print(f"station name: {station_name}")
         foi_id = db.value_from_query(f'select "ID" from "FEATURES" where "NAME" = \'{station_name}\';')
         db.inject_to_observations(df, datastreams, url, foi_id, average)
+
+    else:
+        rich.print("[red]Unimplemented!!")
+        exit()
