@@ -956,7 +956,7 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
             keep = ["timestamp", colname, colname + "_qc"]
             df["timestamp"] = df.index.values
             df = df[keep]
-            df = df.dropna(how="any")
+            df = df.dropna(how="all")
             df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
             df["datastream_id"] = datastream_id
             df = df.set_index("time")
@@ -988,7 +988,7 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
             keep = ["timestamp", "depth", colname, colname + "_qc"]
             df["timestamp"] = df.index.values
             df = df[keep]
-            df = df.dropna(how="any")
+            df = df.dropna(how="all")
             df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
             df["datastream_id"] = datastream_id
             df = df.set_index("time")

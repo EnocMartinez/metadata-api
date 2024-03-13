@@ -309,6 +309,9 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
     if df.empty:
         raise ValueError("Empty dataframe!")
 
+    if data_type not in ["profiles", "detections"]:
+        df = drop_duplicated_indexes(df, keep="first")
+
     db = SensorthingsDbConnector(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
                                  psql_conf["password"], logging.getLogger())
 
@@ -360,7 +363,7 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
     elif data_type == "detections":
         rich.print(f"[purple]====> Detections  {sensor_name} <=======")
         rich.print("[green]start data bulk load")
-        db.inject_to_files(df)
+        db.inject_to_detections(df)
 
     elif data_type == "files":
         rich.print(f"[purple]====> Files  {sensor_name} <=======")

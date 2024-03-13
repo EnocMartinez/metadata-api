@@ -10,6 +10,7 @@ created: 23/3/21
 """
 
 from ..common import LoggerSuperclass, PRL
+import rich
 
 
 class TimescaleDB(LoggerSuperclass):
@@ -158,8 +159,15 @@ class TimescaleDB(LoggerSuperclass):
         :returns: tuple like (MBytes before, MBytes after, compression ratio)
         """
         df = self.db.dataframe_from_query(f"SELECT * FROM hypertable_compression_stats('{table}');")
-        bytes_before = df["before_compression_total_bytes"].values[0]
-        bytes_after = df["after_compression_total_bytes"].values[0]
+        try:
+            bytes_before = df["before_compression_total_bytes"].values[0]
+        except IndexError:
+            rich.print(f"[yellow]Compression not set for table '{table}'")
+            bytes_before = -1
+        try:
+            bytes_after = df["after_compression_total_bytes"].values[0]
+        except IndexError:
+            bytes_after = -1
         if type(bytes_after) is type(None):
             return 0, 0, 0
         else:
