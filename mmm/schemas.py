@@ -254,12 +254,6 @@ __sensors = {
                 },
                 "required": ["parameters", "@processes"]
             }
-        },
-        "@processes": {  # pre-processing or post-processing options
-            "type": "array",
-            "items": {
-                "type": "string"
-            }
         }
     },
     "required": ["description", "shortName", "longName", "serialNumber", "instrumentType", "model", "manufacturer",
@@ -474,7 +468,7 @@ __projects = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "@organization": {"type": "string"},
+                            "@organizations": {"type": "string"},
                             "acronym": {"type": "string"},
                             "fullName": {"type": "string"},
                             "budget": {"type": "number"},
