@@ -499,14 +499,15 @@ def purge_dataframe(df, deployment_history: list):
     return df
 
 
-def drop_duplicated_indexes(df, store_dup=""):
+def drop_duplicated_indexes(df, store_dup="", keep="first"):
     """
     Drops duplicated data points. If an index
     :param df:
-    :param save: if set, the duplicated indexes will be stored in this file
-    :return:
+    :param store_dup: if set, the duplicated indexes will be stored in this file
+    :param keep:  when a duplicated is found keep "first" or "last" as good. If False all occurences will be dropped
+    :return: df without duplicates
     """
-    dup_idx = df[df.index.duplicated(keep=False)]
+    dup_idx = df[df.index.duplicated(keep=keep)]
     total_idx = len(df.index.values)
     if len(dup_idx.index) > 0:
         print("Found %d duplicated entries (%.04f %%)" % (len(dup_idx.index), 100 * len(dup_idx) / total_idx))

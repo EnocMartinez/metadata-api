@@ -295,16 +295,26 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
     """
     This function performs a bulk load of the data contained in the input file
     """
+    rich.print(f"[orange3]Processing data from sensor {sensor_name} type={data_type} file={filename}")
     rich.print("Loading file...", end="")
     if filename.endswith(".csv"):
-        try:
-            df = open_csv(filename, time_format="%Y-%m-%dT%H:%M:%Sz")
-        except ValueError:
-            df = open_csv(filename)
+        opened = False
+        for time_format in ["%Y-%m-%d %H:%M:%S%z", "%Y-%m-%dT%H:%M:%Sz", "%Y-%m-%d %H:%M:%S"]:
+            try:
+                rich.print(f"[cyan]Opening with time format {time_format}")
+                df = open_csv(filename, time_format=time_format)
+                opened = True
+                rich.print("[green]CSV opened!")
+                break
+            except ValueError:
+                rich.print(f"[yellow]Could not parse time with format '{time_format}'")
+                continue
+        if not opened:
+            raise ValueError("Could not open CSV file!")
+
     else:
         rich.print(f"[red]extension {filename.split('.')[-1]} not recognized")
         raise ValueError("Invalid extension")
-    rich.print("[green]done")
 
     if df.empty:
         raise ValueError("Empty dataframe!")
@@ -312,11 +322,22 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
     if data_type not in ["profiles", "detections"]:
         df = drop_duplicated_indexes(df, keep="first")
 
+    elif data_type == "detections":
+        rich.print("[yellow]WARNING! Dropping duplicated indexes caused by wrong picture format")
+        print(df)
+        df = df.reset_index()
+        df = df.set_index(["timestamp", "datastream_id"])
+        dup_idx = df[df.index.duplicated(keep="first")]
+        df = df.drop(dup_idx.index)
+        df = df.reset_index()
+        df = df.set_index("timestamp")
+        print(df)
+
     db = SensorthingsDbConnector(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
                                  psql_conf["password"], logging.getLogger())
 
     # Get the datastream names
-    sensor_id = db.value_from_query(f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';')
+    sensor_id = db.sensor_id_name[sensor_name]
     datastreams = db.dict_from_query(f'select "NAME", "ID" from "DATASTREAMS" where "SENSOR_ID" = \'{sensor_id}\';')
     q = f'select "NAME" as name, "PROPERTIES"->>\'dataType\' as data_type from "DATASTREAMS" where "SENSOR_ID" = {sensor_id};'
     datastream_type = db.dict_from_query(q)

@@ -25,7 +25,7 @@ if __name__ == "__main__":
     argparser.add_argument("-a", "--average", help="Averaged data (period must be specified)", type=str, default="")
     argparser.add_argument("-d", "--detections", help="Detections data", action="store_true")
     argparser.add_argument("-t", "--timeseries", help="Timeseries data", action="store_true")
-    argparser.add_argument("-p", "--profile", help="Profile data", action="store_true")
+    argparser.add_argument("-p", "--profiles", help="Profile data", action="store_true")
     argparser.add_argument("-i", "--inference", help="Inference data", action="store_true")
     argparser.add_argument("-f", "--files", help="Files data (register the paths)", action="store_true")
     args = argparser.parse_args()
@@ -38,10 +38,10 @@ if __name__ == "__main__":
     psql_conf = load_fields_from_dict(secrets["sensorthings"], ["database", "user", "host", "port", "password"])
     url = secrets["sensorthings"]["url"]
 
-    if int(args.timeseries) + int(args.profile) + int(args.detections) + int(args.inference) + int(args.files) != 1:
+    if int(args.timeseries) + int(args.profiles) + int(args.detections) + int(args.inference) + int(args.files) != 1:
         raise ValueError("ONE data type must be selected")
 
-    if args.profile:
+    if args.profiles:
         data_type = "profiles"
     elif args.detections:
         data_type = "detections"

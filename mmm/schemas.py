@@ -455,6 +455,8 @@ __projects = {
         "totalBudget": {"type": "number"},
         "type": {"type": "string", "enum": __project_types__},
         "active": {"type": "boolean"},
+        "dateStart": {"type": "string"},
+        "dateEnd": {"type": "string"},
         # Link to founding entity
         "funding": {
             "type": "object",
