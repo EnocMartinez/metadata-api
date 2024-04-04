@@ -844,6 +844,7 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         init = False
         if self.__last_observation_index < 0:  # not initialized
             self.__last_observation_index = self.get_last_observation_id()
+
         for colname, datastream_id in column_mapper.items():
             if colname not in df_in.columns:
                 continue
@@ -956,7 +957,7 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
             keep = ["timestamp", colname, colname + "_qc"]
             df["timestamp"] = df.index.values
             df = df[keep]
-            df = df.dropna(how="all")
+            df = df.dropna(subset=[colname], how='all')  # drop NaNs in column name
             df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
             df["datastream_id"] = datastream_id
             df = df.set_index("time")
@@ -988,7 +989,7 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
             keep = ["timestamp", "depth", colname, colname + "_qc"]
             df["timestamp"] = df.index.values
             df = df[keep]
-            df = df.dropna(how="all")
+            df = df.dropna(subset=[colname], how='all')  # drop NaNs in column name
             df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
             df["datastream_id"] = datastream_id
             df = df.set_index("time")
@@ -1014,8 +1015,8 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         df = df_in.copy(deep=True)
         df = df.rename(columns={"results": "value"})
         df["timestamp"] = df.index.values
-        df = df.dropna(how="any")
         df = df[["timestamp", "value", "datastream_id"]]
+        df = df.dropna(subset=["value"], how='all')  # drop NaNs in column name
         df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         df = df.set_index("time")
         df["value"] = df["value"].values.astype(int)
@@ -1039,6 +1040,7 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
             self.__last_observation_index = self.get_last_observation_id()
 
         df = df_in.copy(deep=True)
+        df = df.dropna(subset=["results"], how='all')  # drop NaNs in column name
 
         df["PHENOMENON_TIME_START"] = np.datetime_as_string(df.index.values, unit="s", timezone="UTC")
         if "timeEnd" in df.columns:  # if we have the average period
@@ -1085,6 +1087,7 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
             self.__last_observation_index = self.get_last_observation_id()
 
         df = df_in.copy(deep=True)
+        df = df.dropna(subset=["results"], how='all')  # drop NaNs in column name
 
         df["PHENOMENON_TIME_START"] = np.datetime_as_string(df.index.values, unit="s", timezone="UTC")
         if "timeEnd" in df.columns:  # if we have the average period
@@ -1099,8 +1102,7 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         for v in df["results"].values:
             # Force JSON structures to be like: "{\"key\": \"value\"}"
             v = v.replace("'", "\"")
-            v = v.replace("\"", "\\\"")
-            values.append("\"" + v + "\"")
+            values.append(v)
 
         df["RESULT_JSON"] = values
         df["RESULT_STRING"] = np.nan
@@ -1112,8 +1114,7 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
             for v in df["parameters"].values:
                 # Force JSON structures to be like: "{\"key\": \"value\"}"
                 v = v.replace("'", "\"")
-                v = v.replace("\"", "\\\"")
-                values.append("\"" + v + "\"")
+                values.append(v)
 
             df["PARAMETERS"] = values
         else:
@@ -1136,7 +1137,6 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
         :return:
         """
         query = "COPY public.\"%s\" FROM '%s' DELIMITER '%s' CSV HEADER;" % (table, filename, delimiter)
-        rich.print(f"[purple]{query}")
         self.cursor.execute(query)
         self.connection.commit()
 
