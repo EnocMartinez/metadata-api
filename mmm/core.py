@@ -237,7 +237,12 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 }
                 if "@qualityControl" in var.keys():
                     qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
-                    properties["qualityControl"] = qc_doc["qartod"]
+                    properties["qualityControl"] = {
+                        "description": "Quality Control configuration following the QARTOD guidelines" \
+                                       " (https://ioos.noaa.gov/project/qartod) and using the ioos_qc python package " \
+                                       "(https://pypi.org/project/ioos-qc/)",
+                        "qartod": qc_doc["qartod"]
+                    }
 
                 ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
                 ds.register(url, update=update, verbose=True)
@@ -252,7 +257,12 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 }
                 if "@qualityControl" in var.keys():
                     qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
-                    properties["qualityControl"] = qc_doc["qartod"]
+                    properties["qualityControl"] = {
+                        "description": "Quality Control configuration following the QARTOD guidelines"\
+                                       " (https://ioos.noaa.gov/project/qartod) and using the ioos_qc python package "\
+                                       "(https://pypi.org/project/ioos-qc/)",
+                        "qartod": qc_doc["qartod"]
+                    }
 
                 ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
                 ds.register(url, update=update, verbose=True)
