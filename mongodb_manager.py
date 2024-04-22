@@ -68,6 +68,9 @@ def load_from_filesystem(folder, subset=[], history=False):
                     exit()
 
             file_id = filedata["#id"]
+            if file_id != os.path.basename(file).split(".")[0]:
+                rich.print(f"[red]ERROR!! File '{file}' has ID='{file_id}', but it does not match with filename!")
+                exit()
 
             if history:  # in history we have multiple instances with the same id, so add version at the end
                 file_id += f"#v{filedata['#id']}"
