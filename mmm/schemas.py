@@ -309,6 +309,12 @@ __datasets = {
                 "type": "string",
             }
         },
+        "constraints": { # Constraint the datset to certain conditions, such as depth and/or time
+            "type": "object",
+            "properties": {
+                "timeRange": {"type": "string"}
+            }
+        },
         "dataType": __data_types__,  # may be redundant, but helps parsing info
         "dataSource": __data_sources__,
         "dataSourceOptions": {"type": "object"},
@@ -324,7 +330,8 @@ __datasets = {
         },
         "contacts": __contacts_with_roles__(__doi_roles__)
     },
-    "required": ["title", "summary", "@stations", "@sensors", "dataType", "dataSource", "contacts", "dataSourceOptions", "export"]
+    "required": ["title", "summary", "@stations", "@sensors", "dataType", "dataSource", "contacts", "dataSourceOptions",
+                 "export"]
 }
 
 __activities = {
