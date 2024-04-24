@@ -579,8 +579,6 @@ class MetadataCollector:
                             [projects.append(o) for o in op["@projects"]]  # append all projects
                             projects.append(op["@projects"])
 
-
-
     def __check_link(self, parent_collection: str, parent_doc_id: str, target_collection: str, target_doc: str,
                      errors: list) -> list:
         """
@@ -598,7 +596,7 @@ class MetadataCollector:
             if not d:
                 raise ValueError("Never null!")
         except LookupError:
-            errors.append(f"{parent_collection}:{parent_doc_id} broken link {target_collection}:{target_doc}")
+            errors.append(f"{parent_collection}:'{parent_doc_id}' broken link {target_collection}:'{target_doc}'")
         return errors
 
     def __check_dict(self, collection: str, doc_id: str, doc: dict, errors: list) -> list:
@@ -633,6 +631,23 @@ class MetadataCollector:
                         errors = self.__check_dict(collection, doc_id, subvalue, errors)
         return errors
 
+    def __warning(self, collection, doc, warnings):
+        """
+        Hardcoded warnings
+        """
+        if collection == "sensors":
+            if "deployment" in doc.keys():
+                w = f"{collection}:{doc['#id']} 'deployment' in Sensors is deprecated!"
+                rich.print(f"[yellow]{w}")
+                warnings.append(w)
+
+            if "dataType" in doc.keys():
+                w = f"{collection}:{doc['#id']} 'dataType' in Sensors root will be ignored!"
+                rich.print(f"[yellow]{w}")
+                warnings.append(w)
+
+        return warnings
+
     def healthcheck(self, collections=None):
         """
         Ensure all relations in the database. For every document validate it against the generic schema (metadata
@@ -643,6 +658,7 @@ class MetadataCollector:
         assert (type(collections) is list)
         rich.print("[cyan] ==> Ensuring all relations in MongoDB database <==")
         errors = []
+        warnings = []
         if not collections:
             collections = self.collection_names
 
@@ -663,6 +679,14 @@ class MetadataCollector:
                 errors = self.__check_link(col, doc["#id"], "people", doc["#author"], errors)
                 # Scan the rest of the document and check its relations
                 errors = self.__check_dict(col, doc["#id"], doc, errors)
+
+                # Check if there are any warnings
+                warnings = self.__warning(col, doc, warnings)
+
+        if warnings:
+            rich.print("\nWarning report")
+            [rich.print(f"  [yellow]{warning}") for warning in warnings]
+            rich.print(f"[yellow]Got {len(warnings)} warnings!")
 
         if errors:
             rich.print("\nError report")

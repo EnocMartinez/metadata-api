@@ -60,7 +60,13 @@ def inference_process(sensor: dict, process: dict, mc: MetadataCollector, obs_pr
         "modelName": process["name"],
         "weights": process["weights"],
         "trainingConfig": process["trainingConfig"],
-        "trainingData": process["trainingData"]
+        "trainingData": process["trainingData"],
+        "algorithm": process["algorithm"],
+        "results": {
+            "taxa": "Taxa of the identified object",
+            "confidence": "probability that an anchor box contains an object",
+            "bounding_box_xyxy": "normalized bounding box as [xmin, ymin, xmax, ymax]"
+        }
     }
 
     ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
@@ -75,7 +81,7 @@ def inference_process(sensor: dict, process: dict, mc: MetadataCollector, obs_pr
             rich.print(f"Ignoring {taxa_name}...")
 
         taxa_normalized = taxa_name.lower().replace(" ", "_").replace(".", "")
-        name = f"{station}:{sensor_name}:{taxa_normalized}:detections"
+        name = f"{station}:{sensor_name}:{process['name']}:{taxa_normalized}:{process['name']}:detections"
         description = f"Detections of {taxa_name} in pictures from camera {sensor_name} at {station}"
         properties = {
             "fullData": True,
@@ -84,7 +90,8 @@ def inference_process(sensor: dict, process: dict, mc: MetadataCollector, obs_pr
             "algorithm": process["algorithm"],
             "weights": process["weights"],
             "trainingConfig": process["trainingConfig"],
-            "trainingData": process["trainingData"]
+            "trainingData": process["trainingData"],
+            "standardName": taxa_name
         }
         obs_prop_id = obs_props_ids[variable["#id"]]
         ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])

@@ -954,6 +954,10 @@ class SensorthingsDbConnector(PgDatabaseConnector, LoggerSuperclass):
             if colname not in df_in.columns:  # if column is not in dataset, just ignore this datastream
                 continue
             df = df_in.copy(deep=True)
+            var_qc = colname + "_qc"
+            if var_qc not in df.columns:
+                df[var_qc] = 2  # QARTOD value for not applied
+
             keep = ["timestamp", colname, colname + "_qc"]
             df["timestamp"] = df.index.values
             df = df[keep]

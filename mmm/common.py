@@ -217,20 +217,42 @@ def run_subprocess(cmd, fail_exit=False):
     return True
 
 
-def load_fields_from_dict(doc: dict, fields: list) -> dict:
+def __get_field(doc: dict, key: str):
+    if "/" not in key:
+        if key in doc.keys():
+            return True, doc[key]
+        else:
+            return False, None
+    else:
+        keys = key.split("/")
+        if keys[0] not in doc.keys():
+            return False, None
+        return __get_field(doc[keys[0]], "/".join(keys[1:]))
+
+
+def load_fields_from_dict(doc: dict, fields: list, rename: dict = {}) -> dict:
     """
     Takes a document from MongoDB and returns all fields in list. If a field in the list is not there, ignore it:
 
         doc = {"a": 1, "b": 1  "c": 1} and fields = ["a", "b", "d"]
             return {"a": 1, "b": 1 }
-    :param doc:
-    :param fields:
-    :return:
+
+    Nested fields are described with / e.g. {"parent": {"son": 1}} -> "parent/son"
+
+    With rename  the output fields can be renamed
+
     """
-    assert(type(doc) == dict)
-    assert (type(fields) == list)
+    assert type(doc) is dict
+    assert type(fields) is list
     results = {}
     for field in fields:
-        if field in doc.keys():
-            results[field] = doc[field]
+        success, result = __get_field(doc, field)
+        if success:
+            results[field] = result
+
+    for key, value in rename.items():
+        if key in results.keys():
+            results[value] = results.pop(key)
+
     return results
+

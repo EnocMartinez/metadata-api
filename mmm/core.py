@@ -12,11 +12,13 @@ import logging
 
 from mmm import MetadataCollector, CkanClient
 import rich
-from mmm.common import load_fields_from_dict
+from mmm.common import load_fields_from_dict, YEL, RST
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
-from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream
+from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream, \
+    HistoricalLocation
 from mmm.data_sources import SensorthingsDbConnector
 from mmm.processes import average_process, inference_process
+from geojson import Point
 
 
 def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
@@ -183,121 +185,120 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
         stations = mc.get_documents("stations")
         for doc in stations:
             name = doc["#id"]
-            prop = load_fields_from_dict(doc, ["platformType", "manufacturer", "contacts", "emsoFacility", "deployment"])
+            history = get_station_history(mc, name)
+            deployments = [h for h in history if h["type"] == "deployment"]
+            prop = load_fields_from_dict(doc, ["platformType", "manufacturer", "contacts", "emsoFacility"])
 
-            # Register Location
-            loc_name = f"Location of station {name}"
-            loc_description = f"Location of station {name}"
-            lat = prop["deployment"]["coordinates"]["latitude"]
-            lon = prop["deployment"]["coordinates"]["longitude"]
-            depth = prop["deployment"]["coordinates"]["depth"]
-
-            # Register FeatureOfInterest
-            foi_name = name
-            foi_description = f"FeatureOfInterest generated from station {name}"
-            feature = {
-                "type": "Point",
-                "coordinates": [lat, lon]
-            }
-            properties = {
-                "depth": depth,
-                "depth_units": "meters"
-            }
-            foi = FeatureOfInterest(foi_name, foi_description, feature, properties=properties)
-            foi.register(url, verbose=True)
-
-            # Register Thing
+            # Register Thing without location
             description = doc["longName"]
-            t = Thing(name, description, properties=prop)
+            t = Thing(name, description, properties=prop, locations=[])
             t.register(url, update=update, verbose=True)
             things_ids[name] = t.id
 
-            location = Location(loc_name, loc_description, lat, lon, depth, things=[t.id])
-            location.register(url, verbose=True)
+            # Now process any HistoricalLocations to add all the
+            for dep in deployments:
+                lat = dep["position"]["latitude"]
+                lon = dep["position"]["longitude"]
+                depth = dep["position"]["depth"]
+
+                loc_name = f"Point lat={lat}, lon={lon}, depth={depth} meters"
+                loc_description = dep["description"]
+                location = Location(loc_name, loc_description, lat, lon, depth, things=[])
+                location.register(url, update=update, verbose=True)
+
+                histloc = HistoricalLocation(dep["time"], location, t)
+                histloc.register(url, verbose=True, update=update)
 
     for sensor in sensors:
         rich.print(f"Creating Datastreams for sensor {sensor['#id']}")
         sensor_name = sensor["#id"]
-
-        # Create full_data datastreams!
-        for var in sensor["variables"]:
-            varname = var["@variables"]
-            units = var["@units"]
-            station = sensor["deployment"]["@stations"]
-            sensor_id = sensor_ids[sensor_name]
-            thing_id = things_ids[station]
-            obs_prop_id = obs_props_ids[varname]
-            if var["dataType"] == "timeseries":  # creating timeseries data
-                ds_name = f"{station}:{sensor_name}:{varname}:full_data"
-                units_doc = mc.get_document("units", units)
-                ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
-                properties = {
-                    "dataType": "timeseries",
-                    "fullData": True
-                }
-                if "@qualityControl" in var.keys():
-                    qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
-                    properties["qualityControl"] = {
-                        "description": "Quality Control configuration following the QARTOD guidelines" \
-                                       " (https://ioos.noaa.gov/project/qartod) and using the ioos_qc python package " \
-                                       "(https://pypi.org/project/ioos-qc/)",
-                        "qartod": qc_doc["qartod"]
-                    }
-
-                ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
-                ds.register(url, update=update, verbose=True)
-
-            elif var["dataType"] == "profiles":  # creating profile data
-                ds_name = f"{station}:{sensor_name}:{varname}:full_data"
-                units_doc = mc.get_document("units", units)
-                ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
-                properties = {
-                    "dataType": "profiles",
-                    "fullData": True
-                }
-                if "@qualityControl" in var.keys():
-                    qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
-                    properties["qualityControl"] = {
-                        "description": "Quality Control configuration following the QARTOD guidelines"\
-                                       " (https://ioos.noaa.gov/project/qartod) and using the ioos_qc python package "\
-                                       "(https://pypi.org/project/ioos-qc/)",
-                        "qartod": qc_doc["qartod"]
-                    }
-
-                ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
-                ds.register(url, update=update, verbose=True)
-
-            elif var["dataType"] == "files":
-                ds_name = f"{station}:{sensor_name}:{varname}"
-                units_doc = mc.get_document("units", units)
-                ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
-                properties = {
-                    "dataType": "files"
-                }
-                if "@qualityControl" in var.keys():
-                    qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
-                    properties["qualityControl"] = qc_doc["qartod"]
-
-                ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties,
-                                observation_type="OM_Observation")
-                ds.register(url, update=update, verbose=True)
-
-        # Creating average data
-        for sensor_process in sensor["processes"]:
-            process = mc.get_document("processes", sensor_process["@processes"])
-            params = sensor_process["parameters"]
-            station = sensor["deployment"]["@stations"]
-            sensor_id = sensor_ids[sensor_name]
-            thing_id = things_ids[station]
-
-            if process["type"] == "average":
-                average_process(sensor, process, params, mc, obs_props_ids, sensor_id, thing_id, url, update=update)
-
-            elif process["type"] == "inference":
-                inference_process(sensor, process, mc, obs_props_ids, sensor_id, thing_id, url, update=True)
+        sensor_deployments = get_sensor_station_deployment(mc, sensor)
+        stations_processed = []
+        for station, deployment_time in sensor_deployments:
+            if station in stations_processed:
+                continue # already processed for this sensor
             else:
-                rich.print(f"[red]ERROR: process type not implemented '{process['type']}'")
-                exit(-1)
+                stations_processed.append(station
+                                          )
+            rich.print(f"[orange1]Generating Datastreams for sensor={sensor_name} in station={station}")
+            # Create full_data datastreams!
+            for var in sensor["variables"]:
+                varname = var["@variables"]
+                units = var["@units"]
+                sensor_id = sensor_ids[sensor_name]
+                thing_id = things_ids[station]
+                obs_prop_id = obs_props_ids[varname]
+                if var["dataType"] == "timeseries":  # creating timeseries data
+                    ds_name = f"{station}:{sensor_name}:{varname}:full_data"
+                    units_doc = mc.get_document("units", units)
+                    ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
+                    properties = {
+                        "dataType": "timeseries",
+                        "fullData": True
+                    }
+                    if "@qualityControl" in var.keys():
+                        qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
+                        properties["qualityControl"] = {
+                            "description": "Quality Control configuration following the QARTOD guidelines" \
+                                           " (https://ioos.noaa.gov/project/qartod) and using the ioos_qc python package " \
+                                           "(https://pypi.org/project/ioos-qc/)",
+                            "qartod": qc_doc["qartod"]
+                        }
+
+                    ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
+                    ds.register(url, update=update, verbose=True)
+
+                elif var["dataType"] == "profiles":  # creating profile data
+                    ds_name = f"{station}:{sensor_name}:{varname}:full_data"
+                    units_doc = mc.get_document("units", units)
+                    ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
+                    properties = {
+                        "dataType": "profiles",
+                        "fullData": True
+                    }
+                    if "@qualityControl" in var.keys():
+                        qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
+                        properties["qualityControl"] = {
+                            "description": "Quality Control configuration following the QARTOD guidelines" \
+                                           " (https://ioos.noaa.gov/project/qartod) and using the ioos_qc python package " \
+                                           "(https://pypi.org/project/ioos-qc/)",
+                            "qartod": qc_doc["qartod"]
+                        }
+
+                    ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
+                    ds.register(url, update=update, verbose=True)
+
+                elif var["dataType"] == "files":
+                    ds_name = f"{station}:{sensor_name}:{varname}"
+                    units_doc = mc.get_document("units", units)
+                    ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
+                    properties = {
+                        "dataType": "files"
+                    }
+                    if "@qualityControl" in var.keys():
+                        qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
+                        properties["qualityControl"] = qc_doc["qartod"]
+
+                    ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties,
+                                    observation_type="OM_Observation")
+                    ds.register(url, update=update, verbose=True)
+
+            # Creating average data
+            for sensor_process in sensor["processes"]:
+                process = mc.get_document("processes", sensor_process["@processes"])
+                params = sensor_process["parameters"]
+                station = sensor["deployment"]["@stations"]
+                sensor_id = sensor_ids[sensor_name]
+                thing_id = things_ids[station]
+
+                if process["type"] == "average":
+                    average_process(sensor, process, params, mc, obs_props_ids, sensor_id, thing_id, url, update=update)
+
+                elif process["type"] == "inference":
+                    inference_process(sensor, process, mc, obs_props_ids, sensor_id, thing_id, url, update=True)
+                else:
+                    rich.print(f"[red]ERROR: process type not implemented '{process['type']}'")
+                    exit(-1)
 
 
 def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: str, sensor_name: str, data_type,
@@ -429,3 +430,57 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
     else:
         rich.print("[red]Unimplemented!!")
         exit()
+
+
+def get_station_history(mc: MetadataCollector, name: str) -> list:
+    """
+    Looks for all activities with the
+    """
+    station_filter = {"appliedTo.@stations": name}
+    activities = mc.get_documents("activities", mongo_filter=station_filter)
+    history = []
+    for a in activities:
+        h = load_fields_from_dict(a, ["time", "type", "description", "where/position"],
+                                  rename={"where/position": "position"})
+        history.append(h)
+
+    # Sort based on history
+    history = sorted(history, key=lambda x: x['time'])
+    return history
+
+
+def get_sensor_station_deployment(mc: MetadataCollector, sensor_doc: dict) -> list:
+    """
+    Looks for all stations where a sensor has been deployed
+    """
+    assert type(mc) is MetadataCollector
+    assert type(sensor_doc) is dict
+    sensor_name = sensor_doc["#id"]
+    deployments = []  # array of (stationId, deploymentTime)
+    # First, check if there's a deployment in the sensor metadata
+    if "deployment" in sensor_doc.keys():
+        DeprecationWarning(YEL + f"Sensor '{sensor_doc}': including the deployment in the Sensor description is deprecated!" + RST)
+        deployment_time = "1970-01-01T00:00:00Z"
+        station = sensor_doc["deployment"]["@stations"]
+        deployments.append((station, deployment_time))
+
+    # Get all activities with type=deployment and involving this sensor
+    hist = mc.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@sensors": sensor_name})
+    for dep in hist:
+        deployment_time = dep["time"]
+        # The deployment station can be at the 'appliedTo' or at 'where' section
+        if "@stations" in dep["appliedTo"].keys():
+            station = dep["appliedTo"]["@stations"]
+        elif "@stations" in dep["where"].keys():
+            station = dep["where"]["@stations"]
+        else:
+            raise LookupError(f"Activity {hist['#id']} should include @stations in 'where' or in 'appliedTo'")
+        deployments.append((station, deployment_time))
+    return deployments
+
+
+
+
+
+
+

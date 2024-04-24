@@ -165,6 +165,45 @@ def sensorthings_post(url, data, endpoint="", header={"Content-type": "applicati
     return http_response.text
 
 
+def sensorthings_patch(url, data, endpoint="", header={"Content-type": "application/json"}, verbose=False)->bool:
+    """
+    Patches a JSON object to a a SensorThings API
+    :param url: Service URL
+    :param data: dict or string wit the data
+    :param endpoint: API endpoint (optional)
+    :param header: HTTP header
+    :param verbose: prints more info
+    """
+    log.getLogger("requests").setLevel(log.WARNING)
+
+    if type(data) == dict or type(data) == list:
+        if verbose:
+            print("    converting dict/list to string...")
+        data = json.dumps(data, indent=2)
+    elif type(data) == str:
+        pass
+    else:
+        raise ValueError("data must be str, list or dict, got %s" % (str(type(data))))
+
+    if endpoint:
+        if url[-1] != "/":
+            url = url + "/"
+        url += endpoint
+
+    if verbose:
+        print("POSTing to URL", url)
+    http_response = requests.patch(url, data, headers=header)
+
+    if verbose:
+        print_http_response(http_response)
+
+    if http_response.status_code > 300:
+        print_http_response(http_response)
+        raise ValueError("HTTP ERROR")
+
+    return True
+
+
 def sensorthings_get(baseurl, endpoint="", header={"Content-type": "application/json"}):
     """
     Gets an object to a a SensorThings API
@@ -185,7 +224,7 @@ def sensorthings_get(baseurl, endpoint="", header={"Content-type": "application/
     return json_response
 
 
-def sensor_things_delete(baseurl, endpoint, header={"Content-type": "application/json"}):
+def sensorthings_delete(url, endpoint="", header={"Content-type": "application/json"}):
     """
     Gets an object to a a SensorThings API
     :param baseurl: Service base URL
@@ -194,9 +233,10 @@ def sensor_things_delete(baseurl, endpoint, header={"Content-type": "application
     :param header: HTTP header
     :returns: identifier
     """
-    if baseurl[-1] != "/":
-        baseurl = baseurl + "/"
-    url = baseurl + endpoint
+    if endpoint:
+        if baseurl[-1] != "/":
+            baseurl = baseurl + "/"
+        url = baseurl + endpoint
     http_response = requests.delete(url, headers=header)
     if http_response.status_code > 300:
         print_http_response(http_response)
@@ -582,7 +622,7 @@ class Location(AbstractSensorThings):
         AbstractSensorThings.__init__(self, "Location", name=name, description=description)
         self.data["location"] = {
             "type": "Point",
-            "coordinates": [latitude, longitude]
+            "coordinates": [longitude, latitude]
         }
         self.data["properties"] = {
             "depth": depth,
@@ -596,31 +636,6 @@ class Location(AbstractSensorThings):
                     self.data["Things"].append({"@iot.id": t})
                 elif type(t) is Thing:
                     self.data["Things"].append({"@iot.id": t.id})
-
-
-class HistoricalLocation(AbstractSensorThings):
-    def __init__(self, timestamp, location, thing):
-        """
-        Generates a HistoricalLocation
-
-        :param timestamp: time of the locoation
-        :param location: Location object
-        :param thing: thing object
-        """
-        # Valid HistoricalLocation:
-        # {
-        #     "time": "2019-03-01T19:18:08",
-        #     "Locations": [{"@iot.id": 43}],
-        #                   "Thing": {"@iot.id": 67}
-        # }
-        AbstractSensorThings.__init__(self, "HistoricalLocation")
-        self.location = location
-        self.data = {
-            "time": timestamp,
-            "Locations": [{"@iot.id": location.id}],
-            "Thing": {"@iot.id": thing.id},
-        }
-
 
 class Thing(AbstractSensorThings):
     def __init__(self, name, description, properties={}, locations=[]):
@@ -646,6 +661,52 @@ class Thing(AbstractSensorThings):
                 locs.append({"@iot.id": loc.id})
 
         self.data["Locations"] = locs
+
+
+class HistoricalLocation(AbstractSensorThings):
+    def __init__(self, timestamp, location: Location, thing: Thing):
+        """
+        Generates a HistoricalLocation
+
+        :param timestamp: time of the locoation
+        :param location: Location object
+        :param thing: thing object
+        """
+        # Valid HistoricalLocation:
+        # {
+        #     "time": "2019-03-01T19:18:08",
+        #     "Locations": [{"@iot.id": 43}],
+        #                   "Thing": {"@iot.id": 67}
+        # }
+        name = thing.name + " at " + location.name
+        AbstractSensorThings.__init__(self, "HistoricalLocation", name=name)
+        self.location = location
+        self._time = timestamp
+        self._thing_id = thing.id
+        self._location_id = location.id
+        self.data = {
+            "time": timestamp,
+            "Locations": [{"@iot.id": location.id}],
+            "Thing": {"@iot.id": thing.id},
+        }
+
+    def check_if_registered(self, baseurl, cache=True):
+        """
+        Overriding method, this one has no name
+        :return: returns the dict with the data if true or False if not registered
+        """
+        entity_url = self.entity_url(baseurl)
+        url = entity_url + (f"?$filter=Thing/id eq {self._thing_id} and Locations/id eq {self._location_id} and time"
+                            f" eq {self._time}")
+        r = sensorthings_get(url)
+        if len(r["value"]) == 1:
+            self.id = r["value"][0]["@iot.id"]
+            return self.data
+        elif len(r["value"]) > 1:
+            raise ValueError(f"[red]Too many HistoricalLocations found!!")
+        else:
+            return False
+
 
 class DataArray(AbstractSensorThings):
     def __init__(self):

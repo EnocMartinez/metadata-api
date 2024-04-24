@@ -248,7 +248,6 @@ if __name__ == "__main__":
         db_data_hist = load_from_mongodb(mc, subset=collections, history=True)
         fs_data_hist = load_from_filesystem(folder_hist, subset=collections, history=True)
 
-
     if args.put:
         replaced = 0
         inserted = 0

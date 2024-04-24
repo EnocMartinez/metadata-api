@@ -50,7 +50,7 @@ __data_types__ = {
         # others
         "files",  # arbitrary file-based data, such as audio, pictures or video.
         "detections",  # event detections based from other data. An example is fish detections from a picture
-        "inference"    # Output of an AI algorithm, i.e. a list of detected objects by ineference
+        "inference"    # Output of an AI algorithm, i.e. a list of detected objects by inference
     ]
 }
 
@@ -283,16 +283,8 @@ __stations = {
         "manufacturer": __label_definition,
         "contacts": __contacts_with_roles__(__device_roles__),
         "emsoFacility": {"type": "string"},
-        "deployment": {
-            "type": "object",
-            "properties": {
-                "date": {"type": "string"},
-                "coordinates": __coordinates__
-            },
-            "required": ["date", "coordinates"]
-        },
     },
-    "required": ["shortName", "longName", "platformType", "deployment", "contacts"]
+    "required": ["shortName", "longName", "platformType", "contacts"]
 }
 
 
@@ -340,6 +332,7 @@ __activities = {
     "type": "object",
     "properties": {
         "name": {"type": "string"},
+        "description": {"type": "string"},
         "time": {"type": "string"},
         "type": {
             "type": "string",
@@ -349,24 +342,20 @@ __activities = {
             "type": "object",
             "properties": {
                 "@sensors": __string_list__,
-                "@stations": __string_list__,
+                "@stations": {"type": "string"},  # only one station per activitiy
                 "@resources": __string_list__
-            },
-            "oneOf": [
-                {"required": ["@sensors"], "not": {"required": ["@stations", "@resources"]}},
-                {"required": ["@stations"], "not": {"required": ["@sensors", "@resources"]}},
-                {"required": ["@resources"], "not": {"required": ["@sensors", "@stations"]}}
-            ]
+            }
         },
         "where": {
             "type": "object",
             "properties": {
-                "@stations": {"type": "string"}
+                "@stations": {"type": "string"},
+                "position": __coordinates__
             },
-            "required": ["@stations"]
+            "required": []
         },
     },
-    "required": ["name", "appliedTo", "time"]
+    "required": ["name", "description", "appliedTo", "time"]
 }
 
 __operations = {
@@ -446,6 +435,25 @@ __units = {
     "required": ["name", "symbol", "definition", "type"]
 }
 
+__resource_type = [
+    "boat",   # small boat
+    "research_vessel",   # large research vessel used in oceanographic cruises
+    "equipment",
+    "infrastructure",    # element that is considered an infrastructure, such as a junction box
+    "other"       #
+]
+
+__resources = {
+    "$id": "mmm:resources",
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "description": {"type": "string"},
+        "type": {"type": "string", "enum": __resource_type}
+    },
+    "required": ["name", "description", "type"]
+}
+
 __projects = {
     "$id": "mmm:projects",
     "type": "object",
@@ -499,5 +507,5 @@ mmm_schemas = {
     "activities": __activities,
     "projects": __projects,
     "processes": __processes,
-    # "resources": {}
+    "resources": __resources
 }

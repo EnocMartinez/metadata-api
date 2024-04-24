@@ -128,7 +128,7 @@ if __name__ == "__main__":
     argparser.add_argument("--clear", action="store_true", help="clears all prevoius downloads", default=False)
     argparser.add_argument("--force", action="store_true", help="skips insert question", default=False)
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
-                           default="secrets-local.yaml")
+                           default="secrets.yaml")
 
     args = argparser.parse_args()
     with open(args.secrets) as f:
