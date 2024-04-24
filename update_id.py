@@ -117,7 +117,7 @@ if __name__ == "__main__":
                 mc.replace_document(col, new_doc["#id"], new_doc)
 
     rich.print("deleting old document...")
-    mc.delete_document(col, old)
+    mc.delete_document(args.collection, old)
 
 
 
