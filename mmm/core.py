@@ -310,7 +310,14 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
     rich.print("Loading file...", end="")
     if filename.endswith(".csv"):
         opened = False
-        for time_format in ["%Y-%m-%d %H:%M:%S%z", "%Y-%m-%dT%H:%M:%Sz", "%Y-%m-%d %H:%M:%S"]:
+        time_formats = [
+            "%Y-%m-%d %H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%Sz",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y/%m/%d %H:%M:%S",
+            "%d/%m/%Y %H:%M:%S"
+        ]
+        for time_format in time_formats:
             try:
                 rich.print(f"[cyan]Opening with time format {time_format}")
                 df = open_csv(filename, time_format=time_format)
