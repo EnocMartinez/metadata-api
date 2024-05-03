@@ -10,11 +10,11 @@ created: 4/10/23
 """
 
 from argparse import ArgumentParser
-from mmm import DataCollector, SensorthingsDbConnector, setup_log
+from mmm import DataCollector, setup_log
 import yaml
 import rich
 import pandas as pd
-
+from stadb import SensorThingsApiDB
 from mmm.metadata_collector import init_metadata_collector
 
 
@@ -49,8 +49,8 @@ def calculate_time_intervals(time_start: str, time_end: str, periodicity=""):
     else:
         intervals.append((tstart, tend))
 
-    rich.print("exporint the following intervals:")
-    for s,e in intervals:
+    rich.print("exporting the following intervals:")
+    for s, e in intervals:
         rich.print(f"From '{s}' to '{e}'")
 
     return intervals
@@ -80,11 +80,10 @@ def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder
     log = setup_log("sta_to_emso")
     mc = init_metadata_collector(secrets)
     if not csv_file:
-        sta = SensorthingsDbConnector(staconf["host"], staconf["port"], staconf["database"], staconf["user"], staconf["password"], log, timescaledb=True)
+        sta = SensorThingsApiDB(staconf["host"], staconf["port"], staconf["database"], staconf["user"], staconf["password"], log, timescaledb=True)
     else:
         sta = None
     dc = DataCollector(mc, sta=sta)
-
     intervals = calculate_time_intervals(time_start, time_end, periodicity=periodicity)
     datasets = []
 
@@ -104,7 +103,7 @@ if __name__ == "__main__":
     argparser.add_argument("dataset_id", help="Dataset ID", type=str)
     argparser.add_argument("-o", "--output", help="Folder where datasets will be stored", type=str, default="")
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
-                           default="secrets-local.yaml")
+                           default="secrets.yaml")
     argparser.add_argument("-t", "--time-range", help="Time range with ISO notation, like 2022-01-01/2023-01-01",
                            type=str, required=False, default="2022-01-01/2023-01-01")
 

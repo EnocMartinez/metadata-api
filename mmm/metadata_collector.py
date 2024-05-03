@@ -694,3 +694,36 @@ class MetadataCollector:
             rich.print(f"[red]Got {len(errors)} errors!")
         else:
             rich.print(f"[green]\n=) =) Congratulations! You have a healthy database (= (=\n")
+
+    def get_station_position(self, station_name, timestamp) -> (float, float, float):
+        """
+        Returns (latitude, longitude, depth) for a station at a particular time. It looks for all deployments of a
+        station and selects the one immediately before the selected time.
+        """
+        hist = self.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@stations": station_name})
+        data = {
+            "time": [],
+            "latitude": [],
+            "longitude": [],
+            "depth": [],
+        }
+        for dep in hist:
+            data["time"].append(dep["time"])
+            data["latitude"].append(dep["where"]["position"]["latitude"])
+            data["longitude"].append(dep["where"]["position"]["longitude"])
+            data["depth"].append(dep["where"]["position"]["depth"])
+
+        df = pd.DataFrame(data)
+        df["time"] = pd.to_datetime(df["time"])
+        df = df.set_index("time")
+        df = df.sort_index(ascending=False)
+
+        # Loop backwards in deployments to get the first deployment before the timestamp
+        for idx, row in df.iterrows():
+            if pd.Timestamp(timestamp) >= idx:
+                return row["latitude"], row["longitude"], row["depth"]
+
+        raise LookupError(f"Deployment for station={station_name} not found!")
+
+
+

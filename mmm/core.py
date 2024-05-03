@@ -10,15 +10,16 @@ created: 27/10/23
 """
 import logging
 
+import pandas as pd
+
 from mmm import MetadataCollector, CkanClient
 import rich
 from mmm.common import load_fields_from_dict, YEL, RST
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
 from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream, \
     HistoricalLocation
-from mmm.data_sources import SensorthingsDbConnector
 from mmm.processes import average_process, inference_process
-from geojson import Point
+from stadb import SensorThingsApiDB
 
 
 def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
@@ -351,7 +352,7 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         df = df.set_index("timestamp")
         print(df)
 
-    db = SensorthingsDbConnector(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
+    db = SensorThingsApiDB(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
                                  psql_conf["password"], logging.getLogger())
 
     # Get the datastream names
@@ -484,6 +485,10 @@ def get_sensor_station_deployment(mc: MetadataCollector, sensor_doc: dict) -> li
             raise LookupError(f"Activity {hist['#id']} should include @stations in 'where' or in 'appliedTo'")
         deployments.append((station, deployment_time))
     return deployments
+
+
+
+
 
 
 

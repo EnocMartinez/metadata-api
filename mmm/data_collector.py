@@ -11,15 +11,16 @@ created: 30/11/22
 import pandas as pd
 
 from .common import run_subprocess
-from .data_manipulation import open_csv
+from .data_manipulation import open_csv, merge_dataframes_by_columns
 from .metadata_collector import MetadataCollector
-from .data_sources.sensorthings import SensorthingsDbConnector
 import rich
 import os
 import json
+from stadb import SensorThingsApiDB
+
 
 class DataCollector:
-    def __init__(self, mc: MetadataCollector, sta: SensorthingsDbConnector=None):
+    def __init__(self, mc: MetadataCollector, sta: SensorThingsApiDB = None):
         """
         Constructor
         :param mc: MetadataCollecotr object
@@ -30,7 +31,7 @@ class DataCollector:
         self.sta = sta
 
     def generate(self, dataset_id: str, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder: str,
-                 csv_file: str="") -> str:
+                 csv_file: str = "") -> str:
         """
         Generates a dataset based on its configuration stored in MongoDB
         :param dataset_id: #id of the dataset
@@ -40,16 +41,21 @@ class DataCollector:
         os.makedirs(out_folder, exist_ok=True)
         conf = self.mc.get_document("datasets", dataset_id)
 
+        if "constraints" in conf.keys() and "timeRange" in conf["constraints"].keys():
+            time_start = pd.Timestamp(conf["constraints"]["timeRange"].split("/")[0])
+            time_end = pd.Timestamp(conf["constraints"]["timeRange"].split("/")[1])
+            rich.print(f"[yellow]WARNING: Exporting constraints of the datset! from {time_start} to {time_end}")
+
         if csv_file:
             return self.netcdf_from_csv(conf, out_folder, csv_file)
 
-        if conf["dataSource"] in ["sensorthings-db", "sensorthings-tsdb", "sensorthings-tsdb-profiles"]:
+        if conf["dataSource"] == "sensorthings":
             dataset = self.netcdf_from_sta(conf, time_start, time_end, out_folder)
 
         elif conf["dataSource"] == "fileserver":
             dataset = self.zip_from_fileserver(conf, time_start, time_end, out_folder)
         else:
-            rich.print(f"[yellow]WARNING! data_source='{conf['dataSource']}' not implemented")
+            raise ValueError(f"data_source='{conf['dataSource']}' not implemented")
 
         if csv_file:
             pass
@@ -113,24 +119,104 @@ class DataCollector:
         rich.print("[cyan]Generating NetCDF from a SensorThings API file")
         rich.print("processing data_source_options...")
 
-        filename = conf["#id"]  + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".nc"
+        filename = conf["#id"] + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".nc"
         filename = os.path.join(out_folder, filename)
 
         station = self.mc.get_document("stations", conf["@stations"])
+        data_type = conf["dataType"]
+
+        try:
+            full_data = conf["dataSourceOptions"]["fullData"]
+        except KeyError:
+            rich.print("[red]dataSourceOptions/fullData not found in dataset configuration!")
+            raise KeyError("dataSourceOptions/fullData not found in dataset configuration!")
+
+        station_name = station["#id"]
         variables = []  # by default all variables will be used
         if "@variables" in conf.keys():
             variables = conf["@variables"]
 
-        options = conf["dataSourceOptions"]
-        dataframes = []
-        metadata = []
+        dataframes = []  # list with a dataframe per variable
+        metadata = []    # list of a metadata dict per variable
 
-        for sensor_id in conf["@sensors"]:
-            sensor = self.mc.get_document("sensors", sensor_id)
-            rich.print(f"Getting data for sensor '{sensor_id}' from '{time_start}' to '{time_end}'...")
-            df = self.sta.get_dataset(sensor["#id"], station["#id"], options, time_start, time_end, variables=variables)
-            m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
+        for sensor_name in conf["@sensors"]:
+            rich.print(f"[orange1]Getting datastreams from station={station_name} and sensor={sensor_name} fullData={full_data}")
+            rich.print(f"[orange1]dataType='{data_type}'")
+            sensor = self.mc.get_document("sensors", sensor_name)
+
+            # Get the THING_ID from SensorThings based on the Station name
+            thing_id = self.sta.value_from_query(
+                f'select "ID" from "THINGS" where "NAME" = \'{station_name}\';'
+            )
+            sensor_id = self.sta.value_from_query(
+                f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';'
+            )
+            # Super query that returns all varname and datastream_id  for one station-sensor combination
+            # Results are stored as a DataFrame
+            query = f'''select 
+                    "OBS_PROPERTIES"."NAME" as varname, 
+                    "DATASTREAMS"."ID" as datastream_id                    
+                from  
+                    "DATASTREAMS"
+                left join 
+                    "OBS_PROPERTIES"
+                on 
+                    "DATASTREAMS"."OBS_PROPERTY_ID" = "OBS_PROPERTIES"."ID"
+                where 
+                    "DATASTREAMS"."SENSOR_ID" = {sensor_id} and "DATASTREAMS"."THING_ID" = {thing_id} 
+                    and "DATASTREAMS"."PROPERTIES"->>'dataType' = '{data_type}'
+                    and ("DATASTREAMS"."PROPERTIES"->>'fullData')::boolean = {full_data}                    
+                '''
+            if not full_data:
+                # if we are dealing with an average, we need to make sure that the average period matches
+                avg_period = conf["dataSourceOptions"]["averagePeriod"]
+                query += f'\r\n\t\t and "DATASTREAMS"."PROPERTIES"->>\'averagePeriod\' = \'{avg_period}\''
+
+            query += ";"
+            datastreams = self.sta.dataframe_from_query(query)
+            sensor_dataframes = []
+            for idx, ds in datastreams.iterrows():
+                # ds is a dict with 'varname', 'datastream_id' and 'data_type'
+                datastream_id = ds["datastream_id"]
+                varname = ds["varname"]
+                if variables and varname not in variables:
+                    rich.print(f"[yellow]Ignoring variable {varname}")
+                    continue
+                rich.print(f"[purple]Getting {sensor_name} {varname} from {time_start} to {time_end}")
+                # Query all data from the datastream_id during the time range and assign proper variable name
+                if full_data:
+                    q = (
+                        f'''
+                        select timestamp, value as "{varname}", qc_flag as "{varname + "_QC"}" 
+                        from timeseries 
+                        where datastream_id = {datastream_id}
+                        and timestamp between \'{time_start}\' and \'{time_end}\';                     
+                        '''
+                    )
+                else:
+                    q = (
+                        f'''
+                        select
+                            "PHENOMENON_TIME_START" as timestamp,
+                            "RESULT_NUMBER" as "{varname}",
+                            "RESULT_QUALITY"->>'qc_flag' as "{varname + "_QC"}",
+                            "RESULT_QUALITY"->>'stdev' as "{varname + "_STD"}"
+                        from
+                            "OBSERVATIONS"
+                        where
+                            "DATASTREAM_ID" = 42
+                            and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
+                                      
+                                                '''
+                    )
+                df = self.sta.dataframe_from_query(q, debug=True)
+                sensor_dataframes.append(df)
+            df = merge_dataframes_by_columns(sensor_dataframes)
+            df = df.set_index("timestamp")
+            rich.print(f"[cyan]{sensor_name} data from {time_start} to {time_end}")
+            print(df)
             dataframes.append(df)
+            m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
             metadata.append(m)
 
         call_generator(dataframes, metadata, output=filename)
@@ -153,7 +239,7 @@ class DataCollector:
         rich.print("[green]done!")
 
     def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list, os_data_mode="R",
-                            os_data_type="OceanSITES time-series data", tstart="", tend="") -> dict:
+                                 os_data_type="OceanSITES time-series data", tstart="", tend="") -> dict:
         """
         This method returns the configuration required by the Metadata Harmonizer tool from the MongoDB
         :param dataset: sensor dict from MongoDB database
@@ -199,16 +285,13 @@ class DataCollector:
             found = False
             for var in sensor["variables"]:
                 if var["@variables"] == var_id:
-                    rich.print(f"[cyan]processing {var_id}")
                     units[var_id] = self.mc.get_document("units", var["@units"])
                     found = True
             if not found:
                 raise LookupError(f"variable {var_id} not found in sensor {sensor['#id']}!")
 
         var_metadata = {}
-        rich.print(units)
         for variable in variables:
-            rich.print(variable)
             var_id = variable["#id"]
             var_metadata[var_id] = {
                 "*long_name": variable["description"],
@@ -224,19 +307,23 @@ class DataCollector:
             "$sensor_mount": "mounted_on_fixed_structure",
             "$sensor_orientation": "upward"
         }
+
+        latitude, longitude, depth = self.mc.get_station_position(station["#id"], tstart)
         coordinates = {
-            "depth": station["deployment"]["coordinates"]["depth"],
-            "latitude": station["deployment"]["coordinates"]["latitude"],
-            "longitude": station["deployment"]["coordinates"]["longitude"]
+            "depth": depth,
+            "latitude": latitude,
+            "longitude": longitude
         }
 
         # Now build to document
-        return {
+        d = {
             "global": gl,
             "variables": var_metadata,
             "sensor": sensor_metadata,
             "coordinates": coordinates
         }
+        return d
+
 
 def call_generator(dataframes, metadata, output="output.nc", generator_path="../metadata-harmonizer/generator.py"):
     """
@@ -247,7 +334,8 @@ def call_generator(dataframes, metadata, output="output.nc", generator_path="../
     :param generator_path:
     :return:
     """
-    assert(len(dataframes) == len(metadata))
+    assert (len(dataframes) == len(metadata))
+
     csv_files = []
     meta_files = []
     for i in range(len(dataframes)):
@@ -273,3 +361,81 @@ def call_generator(dataframes, metadata, output="output.nc", generator_path="../
     [os.remove(f) for f in csv_files]
     [os.remove(f) for f in meta_files]
     rich.print("[green]ok!")
+
+
+def get_dataset(sta: SensorThingsApiDB, sensor: str, station_name: str, options: dict, time_start: pd.Timestamp,
+                time_end: pd.Timestamp,
+                variables: list = []) -> pd.DataFrame:
+    """
+    Gets all data from a sensor deployed at a certain station from time_start to time_end. If variables is specified
+    only a subset of variables will be returned.
+
+    options is a dict with "rawData" key (true/false) and if False, averagePeriod MUST be specified like:
+        {"rawData": false, "averagePeriod": "30min"}
+            OR
+        {"rawData": true}
+
+    :param sensor: sensor name
+    :param station: station name
+    :param time_start:
+    :param time_end:
+    :param options: dict with rawData and optionally averagePeriod.
+    :param variables: list of variable names
+    :return:
+    """
+    # Make sure options are correct
+    assert "fullData" in options.keys()
+    if not options["rawData"]:
+        assert ("averagePeriod" in options.keys())
+
+    raw_data = options["rawData"]
+
+    if variables:
+        rich.print(f"Keeping only variables: {variables}")
+
+    sensor_id = sta.sensor_id_name[sensor]
+    station_id = sta.thing_id_name[station_name]
+    # Get all datastreams for a sensor
+    datastreams = sta.get_sensor_datastreams(sensor_id)
+    # Keep only datastreams at a specific station
+    datastreams = datastreams[datastreams["thing_id"] == station_id]
+
+    # Drop datastreams with variables that are not in the list
+    if variables:
+        variable_ids = [sta.obs_prop_name_id[v] for v in variables]
+        rich.print(f"variables {variable_ids}")
+        # keep only variables in list
+        all_variable_ids = np.unique(datastreams["obs_prop_id"].values)
+        remove_this = [var_id for var_id in all_variable_ids if var_id not in variable_ids]
+        for remove_id in remove_this:
+            datastreams = datastreams[datastreams["obs_prop_id"] != remove_id]  # keep others
+
+    # Keep only datastreams that match data type
+    remove_idxs = []
+    for idx, row in datastreams.iterrows():
+        if raw_data:
+            if not row["properties"]["rawSensorData"]:
+                remove_idxs.append(idx)
+        else:  # Keep only those variables that are not raw_data and whose period matches the data_type
+            if row["properties"]["rawSensorData"]:  # Do not keep raw data
+                remove_idxs.append(idx)
+            elif row["properties"]["averagePeriod"] != options[
+                "averagePeriod"]:  # do not keep data with different period
+                remove_idxs.append(idx)
+
+    datastreams = datastreams.drop(remove_idxs)
+
+    # Query data for every datastream
+    data = []
+    for idx, row in datastreams.iterrows():
+        datastream_id = row["id"]
+        obs_prop_id = row["obs_prop_id"]
+        df = sta.dataframe_from_datastream(datastream_id, time_start, time_end)
+
+        varname = sta.obs_prop_id_name[obs_prop_id]
+        rename = {"value": varname, "qc_flag": varname + "_QC"}
+        if "stdev" in df.columns:
+            rename["stdev"] = varname + "_SD"
+        df = df.rename(columns=rename)
+        data.append(df)
+    return merge_dataframes_by_columns(data)
