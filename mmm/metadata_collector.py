@@ -540,45 +540,6 @@ class MetadataCollector:
                     raise ValueError("Contact type not valid!")
         raise LookupError(f"Contact with role '{role}' not found in document '{doc['#id']}'")
 
-    def get_funding_projects(self, sensors: list, tstart: str = "", tend: str = ""):
-        """
-        Get the names of the projects that funded the operations over a list of sensors
-        :param sensors:
-        :param tstart:
-        :param tend:
-        :return:
-        """
-        if type(sensors) is str:
-            sensors = [sensors]
-        activities = {}
-        assert (type(sensors) is list)
-        for sensor in sensors:
-            for act in self.get_documents("activities"):
-                if "@sensors" in act["appliedTo"].keys():
-                    if sensor in act["appliedTo"]["@sensors"]:
-                        activities[act["#id"]] = act["time"]
-            rich.print(f"The following activities supported the operations: {activities}")
-
-            for activity_id, time_str in activities.copy().items():
-                timestamp = pd.Timestamp(time_str)
-
-                # Delete activities outside the timeframe of the dataset
-                if tstart and timestamp > pd.Timestamp(tend):
-                    del activities[activity_id]
-                if tstart and timestamp < pd.Timestamp(tstart):
-                    del activities[activity_id]
-
-            # Get all operations with related activities
-            operations = []  # operation_id: operation start time
-            projects = []
-            for op in self.get_documents("operations"):
-                operation_id = op["#id"]
-                for act in activities:
-                    if act in op["@activities"] and operation_id not in operations:
-                        if "@projects" in op.keys():
-                            [projects.append(o) for o in op["@projects"]]  # append all projects
-                            projects.append(op["@projects"])
-
     def __check_link(self, parent_collection: str, parent_doc_id: str, target_collection: str, target_doc: str,
                      errors: list) -> list:
         """

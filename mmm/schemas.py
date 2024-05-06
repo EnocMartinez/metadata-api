@@ -72,11 +72,11 @@ __doi_roles__ = [  # Roles for dataset attribution from MetadataKernel
     "Distributor",
     # Institution tasked with responsibility to generate/disseminate copies of  the resource in either electronic or print form
     "Editor",  # A person who oversees the details related to the publication format of the resource
-    "ProjectLeader",  # Person officially designated as head of project team or sub project team instrumental
+    "ProjectLeader",  # Person officially designated as head of project team or sub-project team instrumental
     "HostingInstitution",
     # Typically, the organisation allowing the resource to be available on the internet through the provision of its hardware/software/operating support     "Researcher", # A person involved in analysing data or the results of an experiment or formal study
     "ProjectLeader",
-    # Person officially designated as head of project team or sub- project team instrumental in the work necessary to development of the resource
+    # Person officially designated as head of project team or sub-project team instrumental in the work necessary to development of the resource
     "RelatedPerson",
     # A person without a specifically defined role in the development of the resource, but who is someone the author wishes to recognize
     "Researcher",  # A person involved in analysing data or the results of an experiment or formal study.
@@ -318,6 +318,7 @@ __datasets = {
         "dataType": __data_types__,  # may be redundant, but helps parsing info
         "dataSource": __data_sources__,
         "dataSourceOptions": {"type": "object"},
+        "dataMode": {"type": "string", "enum": ["real-time", "delayed", "mixed", "provisional"]},
         "export": {
             "type": "object",
             "properties": {
@@ -328,7 +329,17 @@ __datasets = {
             },
             "required": ["namePattern", "period", "path", "host"]
         },
-        "contacts": __contacts_with_roles__(__doi_roles__)
+        "contacts": __contacts_with_roles__(__doi_roles__),
+        "funding": {
+            "type": "object",
+            "properties": {
+                "@projects": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                }
+            },
+            "required": ["@projects"]
+        }
     },
     "required": ["title", "summary", "@stations", "@sensors", "dataType", "dataSource", "contacts", "dataSourceOptions",
                  "export"]

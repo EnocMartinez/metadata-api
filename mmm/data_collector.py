@@ -182,7 +182,7 @@ class DataCollector:
                 if variables and varname not in variables:
                     rich.print(f"[yellow]Ignoring variable {varname}")
                     continue
-                rich.print(f"[purple]Getting {sensor_name} {varname} from {time_start} to {time_end}")
+
                 # Query all data from the datastream_id during the time range and assign proper variable name
                 if full_data:
                     q = (
@@ -209,14 +209,14 @@ class DataCollector:
                                       
                                                 '''
                     )
-                df = self.sta.dataframe_from_query(q, debug=True)
+                df = self.sta.dataframe_from_query(q, debug=False)
                 sensor_dataframes.append(df)
             df = merge_dataframes_by_columns(sensor_dataframes)
             df = df.set_index("timestamp")
             rich.print(f"[cyan]{sensor_name} data from {time_start} to {time_end}")
-            print(df)
             dataframes.append(df)
             m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
+            rich.print(m)
             metadata.append(m)
 
         call_generator(dataframes, metadata, output=filename)
@@ -238,7 +238,7 @@ class DataCollector:
 
         rich.print("[green]done!")
 
-    def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list, os_data_mode="R",
+    def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list, default_data_mode="R",
                                  os_data_type="OceanSITES time-series data", tstart="", tend="") -> dict:
         """
         This method returns the configuration required by the Metadata Harmonizer tool from the MongoDB
@@ -246,7 +246,7 @@ class DataCollector:
         :param sensor: sensor dict from MongoDB database
         :param station: station dict from MongoDB database
         :param variable_ids: list of variables to be included in the dataset
-        :param os_data_mode: OceansSITES data mode, can be 'R' (real-time), 'P' (provisional, 'D' (delayed) or 'M' (mixed)
+        :param default_data_mode: Default data mode
         :param os_data_type: OceanSITES data type, probably by default time-series data
         :return:
         """
@@ -256,27 +256,68 @@ class DataCollector:
 
         variables = [self.mc.get_document("variables", v) for v in variable_ids]
 
+        # Get minimum info (PI and owner)
         pi, _ = self.mc.get_contact_by_role(dataset, "ProjectLeader")
         owner, _ = self.mc.get_contact_by_role(station, "owner")
 
-        projects = self.mc.get_funding_projects(sensor["#id"])
+        # Put all people involved in an array
+        people = []
+        roles = []
+        for c in dataset["contacts"]:
+            role = c["role"]
+            if "@organizations" in c.keys():
+                rich.print(f"[yellow]WARNING: skipping institution '{c['@organizations']}'")
+                continue
+            name = self.mc.get_document("people", c["@people"])["name"]
+            people.append(name)
+            roles.append(role)
+
+        for c in dataset["contacts"]:
+            role = c["role"]
+            if "@organizations" in c.keys():
+                rich.print(f"[yellow]WARNING: skipping institution '{c['@organizations']}'")
+                continue
+            name = self.mc.get_document("people", c["@people"])["name"]
+            people.append(name)
+            roles.append(role)
+
+        # Put funding information
+
+        project_names = []
+        project_codes= []
+        if "funding" in dataset.keys():
+            for project_id in dataset["funding"]["@projects"]:
+                project = self.mc.get_document("projects", project_id)
+                project_names.append(project["acronym"])
+                project_codes.append(project["funding"]["grantId"])
+
+        # Get the OceanSITES Data Mode
+        data_mode = default_data_mode
+        if "dataMode" in dataset.keys():
+            data_mode = dataset["dataMode"]
+        data_mode_dict = {"real-time": "R", "delayed": "D", "mixed": "M", "provisional": "P"}
+        dm = data_mode_dict[data_mode]
 
         # global attributes
         gl = {
             "*title": dataset["title"],
             "*summary": dataset["summary"],
             "*institution_edmo_code": owner["EDMO"].split("/")[-1],  # just the code, not the full URL
-            #"$site_code": "OBSEA (seafloor)",
-            "$emso_facility": "",
+            "$emso_facility": "None",
+            "~network": "None",
             "*source": station["platformType"]["label"],
             "$data_type": os_data_type,
-            "$data_mode": os_data_mode,
+            "$data_mode": dm,
             "*principal_investigator": pi["name"],
             "*principal_investigator_email": pi["email"],
+            "funding_project_names": project_names,
+            "funding_project_codes": project_codes
         }
 
         if "emsoFacility" in station.keys():
             gl["$emso_facility"] = station["emsoFacility"]
+            if station["emsoFacility"] != "None":
+                gl["~network"] = "EMSO"
 
         # Create dictionary where var_id is the key and the value is the units doc
         units = {}
@@ -362,80 +403,3 @@ def call_generator(dataframes, metadata, output="output.nc", generator_path="../
     [os.remove(f) for f in meta_files]
     rich.print("[green]ok!")
 
-
-def get_dataset(sta: SensorThingsApiDB, sensor: str, station_name: str, options: dict, time_start: pd.Timestamp,
-                time_end: pd.Timestamp,
-                variables: list = []) -> pd.DataFrame:
-    """
-    Gets all data from a sensor deployed at a certain station from time_start to time_end. If variables is specified
-    only a subset of variables will be returned.
-
-    options is a dict with "rawData" key (true/false) and if False, averagePeriod MUST be specified like:
-        {"rawData": false, "averagePeriod": "30min"}
-            OR
-        {"rawData": true}
-
-    :param sensor: sensor name
-    :param station: station name
-    :param time_start:
-    :param time_end:
-    :param options: dict with rawData and optionally averagePeriod.
-    :param variables: list of variable names
-    :return:
-    """
-    # Make sure options are correct
-    assert "fullData" in options.keys()
-    if not options["rawData"]:
-        assert ("averagePeriod" in options.keys())
-
-    raw_data = options["rawData"]
-
-    if variables:
-        rich.print(f"Keeping only variables: {variables}")
-
-    sensor_id = sta.sensor_id_name[sensor]
-    station_id = sta.thing_id_name[station_name]
-    # Get all datastreams for a sensor
-    datastreams = sta.get_sensor_datastreams(sensor_id)
-    # Keep only datastreams at a specific station
-    datastreams = datastreams[datastreams["thing_id"] == station_id]
-
-    # Drop datastreams with variables that are not in the list
-    if variables:
-        variable_ids = [sta.obs_prop_name_id[v] for v in variables]
-        rich.print(f"variables {variable_ids}")
-        # keep only variables in list
-        all_variable_ids = np.unique(datastreams["obs_prop_id"].values)
-        remove_this = [var_id for var_id in all_variable_ids if var_id not in variable_ids]
-        for remove_id in remove_this:
-            datastreams = datastreams[datastreams["obs_prop_id"] != remove_id]  # keep others
-
-    # Keep only datastreams that match data type
-    remove_idxs = []
-    for idx, row in datastreams.iterrows():
-        if raw_data:
-            if not row["properties"]["rawSensorData"]:
-                remove_idxs.append(idx)
-        else:  # Keep only those variables that are not raw_data and whose period matches the data_type
-            if row["properties"]["rawSensorData"]:  # Do not keep raw data
-                remove_idxs.append(idx)
-            elif row["properties"]["averagePeriod"] != options[
-                "averagePeriod"]:  # do not keep data with different period
-                remove_idxs.append(idx)
-
-    datastreams = datastreams.drop(remove_idxs)
-
-    # Query data for every datastream
-    data = []
-    for idx, row in datastreams.iterrows():
-        datastream_id = row["id"]
-        obs_prop_id = row["obs_prop_id"]
-        df = sta.dataframe_from_datastream(datastream_id, time_start, time_end)
-
-        varname = sta.obs_prop_id_name[obs_prop_id]
-        rename = {"value": varname, "qc_flag": varname + "_QC"}
-        if "stdev" in df.columns:
-            rename["stdev"] = varname + "_SD"
-        df = df.rename(columns=rename)
-        data.append(df)
-    return merge_dataframes_by_columns(data)
