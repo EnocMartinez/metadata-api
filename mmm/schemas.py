@@ -322,12 +322,11 @@ __datasets = {
         "export": {
             "type": "object",
             "properties": {
-                "namePattern": {"type": "string"},
                 "period": {"type": "string"},
                 "host": {"type": "string"},
                 "path": {"type": "string"}
             },
-            "required": ["namePattern", "period", "path", "host"]
+            "required": ["path", "host"]
         },
         "contacts": __contacts_with_roles__(__doi_roles__),
         "funding": {
@@ -341,8 +340,7 @@ __datasets = {
             "required": ["@projects"]
         }
     },
-    "required": ["title", "summary", "@stations", "@sensors", "dataType", "dataSource", "contacts", "dataSourceOptions",
-                 "export"]
+    "required": ["title", "summary", "@stations", "@sensors", "dataType", "dataSource", "contacts", "dataSourceOptions"]
 }
 
 __activities = {

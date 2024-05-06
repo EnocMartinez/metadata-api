@@ -41,10 +41,19 @@ class DataCollector:
         os.makedirs(out_folder, exist_ok=True)
         conf = self.mc.get_document("datasets", dataset_id)
 
+        # check the dataset constraints
         if "constraints" in conf.keys() and "timeRange" in conf["constraints"].keys():
-            time_start = pd.Timestamp(conf["constraints"]["timeRange"].split("/")[0])
-            time_end = pd.Timestamp(conf["constraints"]["timeRange"].split("/")[1])
-            rich.print(f"[yellow]WARNING: Exporting constraints of the datset! from {time_start} to {time_end}")
+            ctime_start = pd.Timestamp(conf["constraints"]["timeRange"].split("/")[0])
+            ctime_end = pd.Timestamp(conf["constraints"]["timeRange"].split("/")[1])
+
+            if ctime_start > time_start:
+                time_start = ctime_start
+                rich.print(f"[yellow]WARNING: Dataset constraint Forces start time to {ctime_start}")
+            if ctime_end < time_end:
+                time_end = ctime_end
+                rich.print(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
+
+        requires_export = True
 
         if csv_file:
             return self.netcdf_from_csv(conf, out_folder, csv_file)
@@ -52,22 +61,23 @@ class DataCollector:
         if conf["dataSource"] == "sensorthings":
             dataset = self.netcdf_from_sta(conf, time_start, time_end, out_folder)
 
-        elif conf["dataSource"] == "fileserver":
-            dataset = self.zip_from_fileserver(conf, time_start, time_end, out_folder)
+        elif conf["dataSource"] == "filesystem":
+            dataset = self.zip_from_filesystem(conf, time_start, time_end, out_folder)
+            # datasets created from filesystem are already created on the remote server, no export needed
+            requires_export = False
         else:
             raise ValueError(f"data_source='{conf['dataSource']}' not implemented")
 
         if csv_file:
             pass
-        elif "export" in conf.keys():
+
+        elif requires_export and "export" in conf.keys():
             host = conf["export"]["host"]
             path = conf["export"]["path"]
             path = os.path.join(path, dataset_id)
             rich.print(f"Delivering dataset {dataset} to {host}:{path}")
             run_subprocess(["ssh", host, f"mkdir -p {path}"])
             run_subprocess(["rsync", dataset, f"{host}:{path}"])
-        else:
-            rich.print(f"[yellow]WARNING! dataset {dataset_id} doesn't have export options!")
         return dataset
 
     def netcdf_from_csv(self, conf, out_folder, csv_file):
@@ -194,8 +204,8 @@ class DataCollector:
                         '''
                     )
                 else:
-                    q = (
-                        f'''
+                    # Query the regular OBSERVATIONS table
+                    q = (f'''
                         select
                             "PHENOMENON_TIME_START" as timestamp,
                             "RESULT_NUMBER" as "{varname}",
@@ -204,11 +214,9 @@ class DataCollector:
                         from
                             "OBSERVATIONS"
                         where
-                            "DATASTREAM_ID" = 42
+                            "DATASTREAM_ID" = {datastream_id}
                             and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
-                                      
-                                                '''
-                    )
+                    ''')
                 df = self.sta.dataframe_from_query(q, debug=False)
                 sensor_dataframes.append(df)
             df = merge_dataframes_by_columns(sensor_dataframes)
@@ -216,30 +224,75 @@ class DataCollector:
             rich.print(f"[cyan]{sensor_name} data from {time_start} to {time_end}")
             dataframes.append(df)
             m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
-            rich.print(m)
             metadata.append(m)
 
         call_generator(dataframes, metadata, output=filename)
         return filename
 
-    def zip_from_fileserver(self, conf, time_start, time_end, out_folder) -> str:
-        rich.print("[yellow]WARNING! zipping all data in server! slicing not yet implemented!")
-        source_path = conf["dataSourceOptions"]["path"]
+    def zip_from_filesystem(self, conf, time_start, time_end, out_folder) -> str:
+        """
+        Compresses all files in the fileserver into a zip file.
+
+        Required options:
+            dataSourceOptions:
+               url: URL used to register the data
+               path: filesystem raw path (base path for the URL)
+               host: remote server
+        """
+        # First step, get all files indexed in the SensorThings database
+        datastream_ids = []
+        baseurl = conf["dataSourceOptions"]["url"]
+        basepath = conf["dataSourceOptions"]["path"]
+
+        for sensor in conf["@sensors"]:
+            sensor_id = self.sta.sensor_id_name[sensor]
+            # Get the Datastream ID of the files
+            df = self.sta.dataframe_from_query(f'''
+            select
+                "ID" from "DATASTREAMS" 
+            where 
+                "PROPERTIES"->>'dataType' = 'files'
+                and "SENSOR_ID" = {sensor_id}; 
+            ''', debug=False)
+            files_ids = df["ID"].values  # convert dataframe to list
+
+            for i in files_ids:
+                datastream_ids.append(str(i))
+
+        # Now let's query for all registered files in the database matching the datastreams
+        df = self.sta.dataframe_from_query(f'''
+        select "RESULT_STRING" as files from "OBSERVATIONS"             
+        where            
+            "DATASTREAM_ID" IN ({", ".join(datastream_ids)})
+            and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
+        ''', debug=False)
+
+        files = list(df["files"].values)  # List of all files to be compressed
+
+        # Now convert the file URL to a filesystem path
+
+        files = [f.replace(baseurl, basepath) for f in files]        
+        # source_path = conf["dataSourceOptions"]["path"]
         dataset_id = conf["#id"]
         dest_path = os.path.join(conf["export"]["path"], dataset_id)
         filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".zip"
         filename = os.path.join(dest_path, filename)
 
-        cmd = f"zip -r {filename} {source_path}"
-        rich.print(cmd)
-        run_subprocess(["ssh", conf["export"]["host"], f"mkdir -p {dest_path}"])
-        rich.print(f'ssh {conf["export"]["host"]} {cmd}')
-        run_subprocess(["ssh", conf["export"]["host"], cmd])
 
+        rich.print(f"creating folders...", end="")
+        run_subprocess(["ssh", conf["export"]["host"], f"mkdir -p {dest_path}"])
         rich.print("[green]done!")
 
-    def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list, default_data_mode="R",
-                                 os_data_type="OceanSITES time-series data", tstart="", tend="") -> dict:
+        cmd = f"zip -r {filename} {' '.join(files)}"
+        rich.print(f"creating zip file with {len(files)} (this may take a while)...", end="")
+        run_subprocess(["ssh", conf["export"]["host"], cmd])
+        rich.print("[green]done!")
+
+        return filename
+
+    def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list,
+                                 default_data_mode="real-time", os_data_type="OceanSITES time-series data",
+                                 tstart="", tend="") -> dict:
         """
         This method returns the configuration required by the Metadata Harmonizer tool from the MongoDB
         :param dataset: sensor dict from MongoDB database
@@ -253,6 +306,7 @@ class DataCollector:
 
         if not variable_ids:  # By default, use ALL variables
             variable_ids = [dic["@variables"] for dic in sensor["variables"]]
+
 
         variables = [self.mc.get_document("variables", v) for v in variable_ids]
 
@@ -322,7 +376,6 @@ class DataCollector:
         # Create dictionary where var_id is the key and the value is the units doc
         units = {}
         for var_id in variable_ids:
-            rich.print(f"[yellow]looking for {var_id}...")
             found = False
             for var in sensor["variables"]:
                 if var["@variables"] == var_id:

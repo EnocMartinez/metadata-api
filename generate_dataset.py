@@ -16,6 +16,7 @@ import rich
 import pandas as pd
 from stadb import SensorThingsApiDB
 from mmm.metadata_collector import init_metadata_collector
+import os
 
 
 def calculate_time_intervals(time_start: str, time_end: str, periodicity=""):
@@ -71,7 +72,7 @@ def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder
 
     if not out_folder:
         rich.print("using dataset_id as output folder")
-        out_folder = dataset_id
+        out_folder = os.path.join("datasets", dataset_id)
 
     with open(secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
