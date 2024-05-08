@@ -10,9 +10,11 @@ created: 30/11/22
 """
 import pandas as pd
 
-from .common import run_subprocess
+from .ckan import CkanClient
+from .common import run_subprocess, check_url
 from .data_manipulation import open_csv, merge_dataframes_by_columns
-from .metadata_collector import MetadataCollector
+from .metadata_collector import MetadataCollector, init_metadata_collector
+from .fileserver import FileServer
 import rich
 import os
 import json
@@ -20,18 +22,23 @@ from stadb import SensorThingsApiDB
 
 
 class DataCollector:
-    def __init__(self, mc: MetadataCollector, sta: SensorThingsApiDB = None):
-        """
-        Constructor
-        :param mc: MetadataCollecotr object
-        """
-        self.mc = mc
+    def __init__(self, secrets: dict, log, mc: MetadataCollector = None, sta: SensorThingsApiDB = None):
 
-        # Define datasources
-        self.sta = sta
+        if not mc:
+            self.mc = init_metadata_collector(secrets)
+        else:
+            self.mc = mc
+
+        if not sta:
+            staconf = secrets["sensorthings"]
+            self.sta = SensorThingsApiDB(staconf["host"], staconf["port"], staconf["database"], staconf["user"],
+                                    staconf["password"], log, timescaledb=True)
+        else:
+            self.sta = sta
+        self.fileserver = FileServer(secrets["fileserver"])
 
     def generate(self, dataset_id: str, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder: str,
-                 csv_file: str = "") -> str:
+                 ckan: CkanClient ) -> str:
         """
         Generates a dataset based on its configuration stored in MongoDB
         :param dataset_id: #id of the dataset
@@ -53,72 +60,61 @@ class DataCollector:
                 time_end = ctime_end
                 rich.print(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
 
-        requires_export = True
-
-        if csv_file:
-            return self.netcdf_from_csv(conf, out_folder, csv_file)
-
         if conf["dataSource"] == "sensorthings":
-            dataset = self.netcdf_from_sta(conf, time_start, time_end, out_folder)
-
+            dataset_file, dataset_url, file_type = self.netcdf_from_sta(conf, time_start, time_end, out_folder)
         elif conf["dataSource"] == "filesystem":
-            dataset = self.zip_from_filesystem(conf, time_start, time_end, out_folder)
-            # datasets created from filesystem are already created on the remote server, no export needed
-            requires_export = False
+            dataset_file, dataset_url, file_type = self.zip_from_filesystem(conf, time_start, time_end, out_folder)
+
         else:
             raise ValueError(f"data_source='{conf['dataSource']}' not implemented")
 
-        if csv_file:
-            pass
+        if not dataset_url:
+            if "export" in conf.keys():
+                path = conf["export"]["path"]
+                rich.print(f"this is the path {path}")
+                path = os.path.join(path, dataset_id)  # append dataset_id to the path
+                rich.print(f"new path {path}")
+                dataset_url = self.fileserver.send_file(path, dataset_file)
+            else:
+                rich.print(f"[red]ERROR! export required, but no export parameters have been set")
 
-        elif requires_export and "export" in conf.keys():
-            host = conf["export"]["host"]
-            path = conf["export"]["path"]
-            path = os.path.join(path, dataset_id)
-            rich.print(f"Delivering dataset {dataset} to {host}:{path}")
-            run_subprocess(["ssh", host, f"mkdir -p {path}"])
-            run_subprocess(["rsync", dataset, f"{host}:{path}"])
-        return dataset
+        if not check_url(dataset_url):
+            raise ValueError(f"Dataset URL not reachable: {dataset_url}")
 
-    def netcdf_from_csv(self, conf, out_folder, csv_file):
-        df = open_csv(csv_file, format=True)
-        rich.print(df)
-        time_start = pd.Timestamp(df.index.values[0])
-        time_end = pd.Timestamp(df.index.values[-1])
-        rich.print("[purple]Generating NetCDF from a CSV file")
+        # Now, let's register the file as a "resource" in a CKAN "package"
+        if ckan:
+            rich.print(f"[cyan]Publishing dataset as CKAN resource")
+            if not dataset_url:
+                raise ValueError("Datset URL not set, has the dataset been exported?")
+            packages = ckan.get_package_list()
+            # Package ID should be the dataset ID in lowercase
+            package_id = conf["#id"].lower()
 
-        filename = conf["#id"] + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".nc"
-        filename = os.path.join(out_folder, filename)
+            if package_id not in packages:
+                raise ValueError(f"Datset {package_id} not published in CKAN!")
 
-        station = self.mc.get_document("stations", conf["@stations"])
-        variables = []  # by default all variables will be used
-        if "@variables" in conf.keys():
-            variables = conf["@variables"]
+            # Make filename without extension the resource ID
+            resource_id = os.path.basename(dataset_file).split(".")[0]
 
-        options = conf["dataSourceOptions"]
-        dataframes = []
-        metadata = []
+            start_date = time_start.strftime("%Y-%m-%d")
+            end_date = time_end.strftime("%Y-%m-%d")
 
-        for sensor_id in conf["@sensors"]:
-            sensor = self.mc.get_document("sensors", sensor_id)
-            rich.print(f"Getting data for sensor '{sensor_id}' from '{time_start}' to '{time_end}'...")
+            description = f"data from {start_date} to {end_date}"
+            name = f"data from {start_date} to {end_date}"
 
-            m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
-            dataframes.append(df)
-            metadata.append(m)
+            r = ckan.resource_create(
+                package_id,
+                resource_id,
+                description,
+                name,
+                resource_url=dataset_url,
+                format=file_type,
+            )
+            rich.print(f"[cyan]Registered!")
+            rich.print(r)
 
-        df = open_csv(csv_file)
-        dataframes = [df]
-        if len(conf["@sensors"]) != 1:
-            # create dummy csv files with just the header for the metadata harmonizer
-            dummydata = {"timestamp": [], "depth": []}
-            for v in df.columns:
-                dummydata[v] = []
-            dummydf = pd.DataFrame(dummydata)
-            dataframes.append(dummydf)
-            rich.print(dummydf)
+        return dataset_file, dataset_url
 
-        call_generator(dataframes, metadata, output=filename)
 
     def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder, csv_file=""):
         """
@@ -227,7 +223,9 @@ class DataCollector:
             metadata.append(m)
 
         call_generator(dataframes, metadata, output=filename)
-        return filename
+
+        # We should return (file, url), but we don't have url yet
+        return filename, None, "NetCDF"
 
     def zip_from_filesystem(self, conf, time_start, time_end, out_folder) -> str:
         """
@@ -271,7 +269,10 @@ class DataCollector:
 
         # Now convert the file URL to a filesystem path
 
-        files = [f.replace(baseurl, basepath) for f in files]        
+        files = [f.replace(baseurl, basepath) for f in files]
+
+        file_type = files[0].split(".")[-1]
+
         # source_path = conf["dataSourceOptions"]["path"]
         dataset_id = conf["#id"]
         dest_path = os.path.join(conf["export"]["path"], dataset_id)
@@ -288,7 +289,9 @@ class DataCollector:
         run_subprocess(["ssh", conf["export"]["host"], cmd])
         rich.print("[green]done!")
 
-        return filename
+        dataset_url = self.fileserver.path2url(filename)
+
+        return filename, dataset_url, file_type
 
     def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list,
                                  default_data_mode="real-time", os_data_type="OceanSITES time-series data",
@@ -306,7 +309,6 @@ class DataCollector:
 
         if not variable_ids:  # By default, use ALL variables
             variable_ids = [dic["@variables"] for dic in sensor["variables"]]
-
 
         variables = [self.mc.get_document("variables", v) for v in variable_ids]
 
@@ -338,7 +340,7 @@ class DataCollector:
         # Put funding information
 
         project_names = []
-        project_codes= []
+        project_codes = []
         if "funding" in dataset.keys():
             for project_id in dataset["funding"]["@projects"]:
                 project = self.mc.get_document("projects", project_id)

@@ -12,6 +12,7 @@ import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import rich
+import requests
 import subprocess
 
 # Color codes
@@ -256,3 +257,17 @@ def load_fields_from_dict(doc: dict, fields: list, rename: dict = {}) -> dict:
 
     return results
 
+
+def check_url(url):
+    """
+    Checks if a URL is reachable without downloading its contents
+    """
+    assert type(url) is str, f"Expected string got {type(url)}"
+    try:
+        response = requests.head(url)
+        if response.status_code == 200:
+            return True
+        else:
+            return False
+    except requests.ConnectionError:
+        return False

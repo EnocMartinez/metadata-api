@@ -10,11 +10,13 @@ created: 4/10/23
 """
 
 from argparse import ArgumentParser
-from mmm import DataCollector, setup_log
+from mmm import DataCollector, setup_log, CkanClient
 import yaml
 import rich
 import pandas as pd
 from stadb import SensorThingsApiDB
+
+from mmm.fileserver import FileServer
 from mmm.metadata_collector import init_metadata_collector
 import os
 
@@ -57,7 +59,7 @@ def calculate_time_intervals(time_start: str, time_end: str, periodicity=""):
     return intervals
 
 
-def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder: str, secrets, periodicity="", csv_file="") -> list:
+def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder: str, secrets, periodicity="", ckan=False) -> list:
     """
     Generate a dataset following the configuration in the MongoDB dataset register.
     :param dataset_id: id of the dataset register
@@ -76,20 +78,18 @@ def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder
 
     with open(secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
-        staconf = secrets["sensorthings"]
 
     log = setup_log("sta_to_emso")
     mc = init_metadata_collector(secrets)
-    if not csv_file:
-        sta = SensorThingsApiDB(staconf["host"], staconf["port"], staconf["database"], staconf["user"], staconf["password"], log, timescaledb=True)
-    else:
-        sta = None
-    dc = DataCollector(mc, sta=sta)
+    if ckan:
+        ckan = CkanClient(mc, secrets["ckan"]["url"], secrets["ckan"]["api_key"])
+
+    dc = DataCollector(secrets, log, mc=mc)
+
     intervals = calculate_time_intervals(time_start, time_end, periodicity=periodicity)
     datasets = []
-
     for tstart, tend in intervals:
-        dataset = dc.generate(dataset_id, tstart, tend, out_folder, csv_file=csv_file)
+        dataset = dc.generate(dataset_id, tstart, tend, out_folder, ckan=ckan)
         datasets.append(dataset)
 
     rich.print("The following datasets have been generated:")
@@ -103,18 +103,17 @@ if __name__ == "__main__":
     argparser = ArgumentParser()
     argparser.add_argument("dataset_id", help="Dataset ID", type=str)
     argparser.add_argument("-o", "--output", help="Folder where datasets will be stored", type=str, default="")
+    argparser.add_argument("-c", "--ckan", help="Export to CKAN", action="store_true")
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
                            default="secrets.yaml")
     argparser.add_argument("-t", "--time-range", help="Time range with ISO notation, like 2022-01-01/2023-01-01",
                            type=str, required=False, default="2022-01-01/2023-01-01")
-
     argparser.add_argument("-p", "--period", help="period to generate files, 'day', 'month' or 'year'. If not set a "
                                                   "single big file will be generated", type=str,
                            required=False, default="")
-    argparser.add_argument("-c", "--csv-file", help="import data from input csv file", type=str, required=False,
-                           default="")
 
     args = argparser.parse_args()
     tstart, tend = args.time_range.split("/")
-    generate_dataset(args.dataset_id, tstart, tend,  args.output, args.secrets, periodicity=args.period, csv_file=args.csv_file)
+
+    generate_dataset(args.dataset_id, tstart, tend,  args.output, args.secrets, periodicity=args.period, ckan=args.ckan)
 

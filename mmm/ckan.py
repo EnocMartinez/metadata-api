@@ -77,7 +77,6 @@ class CkanClient:
         url = self.url + "package_list"
         return self.ckan_get(url)
 
-
     def package_register(self, name, title, description="", id="", private=False, author="", author_email="",
                          license_id="cc-by", groups=[], owner_org="", extras={}):
         """
@@ -95,13 +94,16 @@ class CkanClient:
         :return: CKAN's response as JSON dict
         """
 
-        # check if packaget eixsts
+        # check if package eixsts
         action = "create"
         package_id = normalize_string(id)
         registered_packages = self.get_package_list()
 
         if package_id in registered_packages:
+            rich.print(f"[cyan]Dataset '{package_id}' already registered, patching")
             action = "patch"
+        else:
+            rich.print(f"[green]Creating new dataset '{package_id}'")
 
         data = {
             "name": name,
@@ -137,7 +139,8 @@ class CkanClient:
     #     patch_data["id"] = id
     #     return self.ckan_post(url, patch_data)
 
-    def resource_create(self, package_id, id, description="", name="", upload_file=None, resource_url="", format=""):
+    def resource_create(self, package_id, resource_id, description="", name="", upload_file=None, resource_url="",
+                        format=""):
         """
         Adds a resource to a dataset
         :param datadict: Dictionary with metadata
@@ -160,16 +163,17 @@ class CkanClient:
         # cache_last_updated (iso date string) – (optional)
         # upload (FieldStorage (optional) needs multipart/form-data) – (optional)
 
-        resource = self.check_if_resource_exists(id)
-        if resource:
-            rich.print("[yellow]Resource %s already registered!" % id)
-            return resource
+        if self.check_if_resource_exists(resource_id):
+            rich.print(f"[cyan]Resource %s already registered, patching" % resource_id)
+            action = "patch"
+        else:
+            action = "post"
 
         datadict = {
-            "id": id,
+            "id": resource_id,
             "package_id": package_id,
             "description": description,
-            "name": name,
+            "name": name
         }
 
         if format:
@@ -180,7 +184,15 @@ class CkanClient:
         if resource_url:
             datadict["url"] = resource_url
 
-        url = self.url + "resource_create"
+        if action == "patch":
+            rich.print(f"resource {resource_id} already exists, patching...")
+            url = self.url + f"resource_patch"
+            return self.ckan_patch(url, datadict)
+        else:
+            rich.print(f"Registering {package_id}...")
+            url = self.url + "resource_create"
+            return self.ckan_post(url, datadict)
+
         return self.ckan_post(url, datadict, file=upload_file)
 
     def check_if_package_exists(self, id):

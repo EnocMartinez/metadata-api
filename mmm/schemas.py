@@ -206,6 +206,7 @@ __organizations = {
         },
         "ROR": {"type": "string"},
         "EDMO": {"type": "string"},
+        "logoUrl": {"type": "string"}
     },
     "required": ["fullName", "acronym", "alternativeNames"]
 }
@@ -322,11 +323,9 @@ __datasets = {
         "export": {
             "type": "object",
             "properties": {
-                "period": {"type": "string"},
-                "host": {"type": "string"},
                 "path": {"type": "string"}
             },
-            "required": ["path", "host"]
+            "required": ["path"]
         },
         "contacts": __contacts_with_roles__(__doi_roles__),
         "funding": {
@@ -481,6 +480,7 @@ __projects = {
         "active": {"type": "boolean"},
         "dateStart": {"type": "string"},
         "dateEnd": {"type": "string"},
+        "logoUrl": {"type": "string"},
         # Link to founding entity
         "funding": {
             "type": "object",

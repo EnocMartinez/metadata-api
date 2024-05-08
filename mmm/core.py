@@ -9,9 +9,7 @@ license: MIT
 created: 27/10/23
 """
 import logging
-
 import pandas as pd
-
 from mmm import MetadataCollector, CkanClient
 import rich
 from mmm.common import load_fields_from_dict, YEL, RST
@@ -49,7 +47,6 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
         rich.print(ckan_organizations)
 
         for doc in mc.get_documents("organizations"):
-            rich.print(doc)
             name = doc["#id"]
             if "public" in doc.keys() and doc["public"]:
                 organization_id = doc["#id"].lower()
@@ -57,7 +54,7 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
                 extras = load_fields_from_dict(doc, ["ROR", "EDMO"])
                 ckan.organization_create(organization_id, name, title, extras=extras)
             else:
-                rich.print(f"ignoring private organization {name}...")
+                rich.print(f"[yellow]ignoring private organization {name}...")
 
     # CKAN Projects
     if "projects" in collections:
@@ -84,8 +81,8 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
                 extras["end_date"] = doc["dateEnd"]
 
             logo = ""
-            if "logo" in doc.keys():
-                logo = doc["logo"]
+            if "logoUrl" in doc.keys():
+                logo = doc["logoUrl"]
 
             ckan.group_create(project_id, name, acronym, description=title, extras=extras, image_url=logo)
 
@@ -93,37 +90,61 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
         for doc in mc.get_documents("datasets"):
             name = doc["#id"]
             dataset_id = name.lower()
+            package_name = dataset_id
+
+            rich.print(f"[orange1]Processing dataset {name}")
+
             title = doc["title"]
             description = doc["summary"]
+            sensors = doc["@sensors"]
 
             station = mc.get_station(doc["@stations"])
-
-            sensors = [s for s in doc["@sensors"]]
-            sensors = ", ".join(sensors)
+            latitude, longitude, depth = get_station_coordinates(mc, station)
 
             extras = {
                 "station": station["#id"],
-                "latitude": station["deployment"]["coordinates"]["latitude"],
-                "longitude": station["deployment"]["coordinates"]["longitude"],
-                "depth": station["deployment"]["coordinates"]["depth"],
-                "sensors": sensors
+                "latitude": latitude,
+                "longitude": longitude,
+                "depth": depth,
+                "sensors": ", ".join(sensors)
             }
             owner = ""
-
+            groups = []
             # process contacts
+            for contact in doc["contacts"]:
+                role = contact["role"]
+                if "@people" in contact.keys():
+                    name = mc.get_people(contact["@people"])["name"]
+                elif "@organizations" in contact.keys():
+                    name = mc.get_organization(contact["@organizations"])["fullName"]
+                    if role == "owner":  # assign the owner organization
+                        owner = contact["@organizations"].lower()
+
+                if role not in extras.keys():
+                    extras[role] = name
+                else:
+                    extras[role] += ", " + name
+
             for contact in station["contacts"]:
                 role = contact["role"]
                 if "@people" in contact.keys():
-                    person = mc.get_people(contact["@people"])
-                    name = person["name"]
-                    extras[role] = name
+                    name = mc.get_people(contact["@people"])["name"]
                 elif "@organizations" in contact.keys():
-                    org = mc.get_organization(contact["@organizations"])
-                    extras[role] = org["fullName"]
-                    if role == "owner":
+                    name = mc.get_organization(contact["@organizations"])["fullName"]
+                    if role == "owner":  # assign the owner organization
                         owner = contact["@organizations"].lower()
+                if role not in extras.keys():
+                    extras[role] = name
+                else:
+                    extras[role] += ", " + name
 
-            ckan.package_register(doc["#id"], title, description, dataset_id, extras=extras, owner_org=owner.lower())
+            groups = []  # assign to ckan groups
+            if "funding" in doc.keys():
+                for project_id in doc["funding"]["@projects"]:
+                    groups.append({"id": project_id.lower()})
+
+            ckan.package_register(package_name, title, description, dataset_id, extras=extras, owner_org=owner.lower(),
+                                  groups=groups)
 
 
 def get_properties(doc: dict, properties: list) -> dict:
@@ -475,6 +496,7 @@ def get_sensor_station_deployment(mc: MetadataCollector, sensor_doc: dict) -> li
     # Get all activities with type=deployment and involving this sensor
     hist = mc.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@sensors": sensor_name})
     for dep in hist:
+        rich.print(dep)
         deployment_time = dep["time"]
         # The deployment station can be at the 'appliedTo' or at 'where' section
         if "@stations" in dep["appliedTo"].keys():
@@ -485,6 +507,42 @@ def get_sensor_station_deployment(mc: MetadataCollector, sensor_doc: dict) -> li
             raise LookupError(f"Activity {hist['#id']} should include @stations in 'where' or in 'appliedTo'")
         deployments.append((station, deployment_time))
     return deployments
+
+
+def get_station_deployments(mc: MetadataCollector, station_id: str) -> list:
+    """
+    Looks for all stations where a sensor has been deployed
+    """
+    assert type(mc) is MetadataCollector
+    assert type(station_id) is str
+    # Get all activities with type=deployment and involving this sensor
+    deployments = mc.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@stations": station_id})
+    deployments = sorted(deployments, key=lambda x: x['time'])
+    return deployments
+
+
+def get_station_coordinates(mc: MetadataCollector, station: any) -> (float, float, float):
+    """
+    Looks for the latest coordinates of a station based on its deployment history. Station may be station_id (str) or
+    the station document (dict)
+    """
+    if type(station) is str:
+        station = mc.get_document("station", station)
+    elif type(station) is dict:
+        pass
+    else:
+        raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
+    rich.print(f"[cyan]Looking for deployment of station {station['#id']}")
+    deployments = get_station_deployments(mc, station['#id'])
+
+    for deployment in reversed(deployments):
+        # Get the latest deployment
+        latitude = deployment["where"]["position"]["latitude"]
+        longitude = deployment["where"]["position"]["longitude"]
+        depth = deployment["where"]["position"]["depth"]
+        break
+
+    return latitude, longitude, depth
 
 
 
