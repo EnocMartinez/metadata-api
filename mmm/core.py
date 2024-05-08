@@ -48,11 +48,16 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
 
         for doc in mc.get_documents("organizations"):
             name = doc["#id"]
+            image_url = ""
             if "public" in doc.keys() and doc["public"]:
                 organization_id = doc["#id"].lower()
                 title = doc["fullName"]
                 extras = load_fields_from_dict(doc, ["ROR", "EDMO"])
-                ckan.organization_create(organization_id, name, title, extras=extras)
+
+                if "logoUrl" in doc.keys():
+                    image_url = doc["logoUrl"]
+
+                ckan.organization_create(organization_id, name, title, extras=extras, image_url=image_url)
             else:
                 rich.print(f"[yellow]ignoring private organization {name}...")
 
