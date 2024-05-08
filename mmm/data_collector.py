@@ -12,7 +12,7 @@ import pandas as pd
 
 from .ckan import CkanClient
 from .common import run_subprocess, check_url
-from .data_manipulation import open_csv, merge_dataframes_by_columns
+from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
 import rich
@@ -32,13 +32,13 @@ class DataCollector:
         if not sta:
             staconf = secrets["sensorthings"]
             self.sta = SensorThingsApiDB(staconf["host"], staconf["port"], staconf["database"], staconf["user"],
-                                    staconf["password"], log, timescaledb=True)
+                                         staconf["password"], log, timescaledb=True)
         else:
             self.sta = sta
         self.fileserver = FileServer(secrets["fileserver"])
 
     def generate(self, dataset_id: str, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder: str,
-                 ckan: CkanClient ) -> str:
+                 ckan: CkanClient, format="") -> str:
         """
         Generates a dataset based on its configuration stored in MongoDB
         :param dataset_id: #id of the dataset
@@ -61,7 +61,12 @@ class DataCollector:
                 rich.print(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
 
         if conf["dataSource"] == "sensorthings":
-            dataset_file, dataset_url, file_type = self.netcdf_from_sta(conf, time_start, time_end, out_folder)
+
+            if format.lower() == "csv":
+                dataset_file, dataset_url, file_type = self.csv_from_sta(conf, time_start, time_end, out_folder)
+            else:
+                dataset_file, dataset_url, file_type = self.netcdf_from_sta(conf, time_start, time_end, out_folder)
+
         elif conf["dataSource"] == "filesystem":
             dataset_file, dataset_url, file_type = self.zip_from_filesystem(conf, time_start, time_end, out_folder)
 
@@ -115,6 +120,99 @@ class DataCollector:
 
         return dataset_file, dataset_url
 
+    def dataframe_from_sta(self, conf: dict, station: dict , sensor: dict, time_start: pd.Timestamp, time_end: pd.Timestamp):
+        """
+        Returns a DataFrame for a specific Sensor in a specific time interval
+        """
+
+        data_type = conf["dataType"]
+        sensor_name = sensor["#id"]
+        station_name = station["#id"]
+
+
+        variables = []  # by default all variables will be used
+        if "@variables" in conf.keys():
+            variables = conf["@variables"]
+
+        try:
+            full_data = conf["dataSourceOptions"]["fullData"]
+        except KeyError:
+            rich.print("[red]dataSourceOptions/fullData not found in dataset configuration!")
+            raise KeyError("dataSourceOptions/fullData not found in dataset configuration!")
+
+        rich.print(
+            f"[orange1]Getting datastreams from station={station_name} and sensor={sensor_name} fullData={full_data}")
+        rich.print(f"[orange1]dataType='{data_type}'")
+
+        # Get the THING_ID from SensorThings based on the Station name
+        thing_id = self.sta.value_from_query(
+            f'select "ID" from "THINGS" where "NAME" = \'{station_name}\';'
+        )
+        sensor_id = self.sta.value_from_query(
+            f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';'
+        )
+        # Super query that returns all varname and datastream_id  for one station-sensor combination
+        # Results are stored as a DataFrame
+        query = f'''select 
+                "OBS_PROPERTIES"."NAME" as varname, 
+                "DATASTREAMS"."ID" as datastream_id                    
+            from  
+                "DATASTREAMS"
+            left join 
+                "OBS_PROPERTIES"
+            on 
+                "DATASTREAMS"."OBS_PROPERTY_ID" = "OBS_PROPERTIES"."ID"
+            where 
+                "DATASTREAMS"."SENSOR_ID" = {sensor_id} and "DATASTREAMS"."THING_ID" = {thing_id} 
+                and "DATASTREAMS"."PROPERTIES"->>'dataType' = '{data_type}'
+                and ("DATASTREAMS"."PROPERTIES"->>'fullData')::boolean = {full_data}                    
+            '''
+        if not full_data:
+            # if we are dealing with an average, we need to make sure that the average period matches
+            avg_period = conf["dataSourceOptions"]["averagePeriod"]
+            query += f'\r\n\t\t and "DATASTREAMS"."PROPERTIES"->>\'averagePeriod\' = \'{avg_period}\''
+
+        query += ";"
+        datastreams = self.sta.dataframe_from_query(query)
+        sensor_dataframes = []
+        for idx, ds in datastreams.iterrows():
+            # ds is a dict with 'varname', 'datastream_id' and 'data_type'
+            datastream_id = ds["datastream_id"]
+            varname = ds["varname"]
+            if variables and varname not in variables:
+                rich.print(f"[yellow]Ignoring variable {varname}")
+                continue
+
+            # Query all data from the datastream_id during the time range and assign proper variable name
+            if full_data:
+                q = (
+                    f'''
+                    select timestamp, value as "{varname}", qc_flag as "{varname + "_QC"}" 
+                    from timeseries 
+                    where datastream_id = {datastream_id}
+                    and timestamp between \'{time_start}\' and \'{time_end}\';                     
+                    '''
+                )
+            else:
+                # Query the regular OBSERVATIONS table
+                q = (f'''
+                    select
+                        "PHENOMENON_TIME_START" as timestamp,
+                        "RESULT_NUMBER" as "{varname}",
+                        "RESULT_QUALITY"->>'qc_flag' as "{varname + "_QC"}",
+                        "RESULT_QUALITY"->>'stdev' as "{varname + "_STD"}"
+                    from
+                        "OBSERVATIONS"
+                    where
+                        "DATASTREAM_ID" = {datastream_id}
+                        and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
+                ''')
+            df = self.sta.dataframe_from_query(q, debug=False)
+            sensor_dataframes.append(df)
+        df = merge_dataframes_by_columns(sensor_dataframes)
+        df = df.set_index("timestamp")
+        df = df.sort_index(ascending=True)
+        return df
 
     def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder, csv_file=""):
         """
@@ -129,94 +227,18 @@ class DataCollector:
         filename = os.path.join(out_folder, filename)
 
         station = self.mc.get_document("stations", conf["@stations"])
-        data_type = conf["dataType"]
 
-        try:
-            full_data = conf["dataSourceOptions"]["fullData"]
-        except KeyError:
-            rich.print("[red]dataSourceOptions/fullData not found in dataset configuration!")
-            raise KeyError("dataSourceOptions/fullData not found in dataset configuration!")
-
-        station_name = station["#id"]
         variables = []  # by default all variables will be used
         if "@variables" in conf.keys():
             variables = conf["@variables"]
 
         dataframes = []  # list with a dataframe per variable
-        metadata = []    # list of a metadata dict per variable
+        metadata = []  # list of a metadata dict per variable
 
         for sensor_name in conf["@sensors"]:
-            rich.print(f"[orange1]Getting datastreams from station={station_name} and sensor={sensor_name} fullData={full_data}")
-            rich.print(f"[orange1]dataType='{data_type}'")
             sensor = self.mc.get_document("sensors", sensor_name)
+            df = self.dataframe_from_sta(conf, station, sensor, time_start, time_end)
 
-            # Get the THING_ID from SensorThings based on the Station name
-            thing_id = self.sta.value_from_query(
-                f'select "ID" from "THINGS" where "NAME" = \'{station_name}\';'
-            )
-            sensor_id = self.sta.value_from_query(
-                f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';'
-            )
-            # Super query that returns all varname and datastream_id  for one station-sensor combination
-            # Results are stored as a DataFrame
-            query = f'''select 
-                    "OBS_PROPERTIES"."NAME" as varname, 
-                    "DATASTREAMS"."ID" as datastream_id                    
-                from  
-                    "DATASTREAMS"
-                left join 
-                    "OBS_PROPERTIES"
-                on 
-                    "DATASTREAMS"."OBS_PROPERTY_ID" = "OBS_PROPERTIES"."ID"
-                where 
-                    "DATASTREAMS"."SENSOR_ID" = {sensor_id} and "DATASTREAMS"."THING_ID" = {thing_id} 
-                    and "DATASTREAMS"."PROPERTIES"->>'dataType' = '{data_type}'
-                    and ("DATASTREAMS"."PROPERTIES"->>'fullData')::boolean = {full_data}                    
-                '''
-            if not full_data:
-                # if we are dealing with an average, we need to make sure that the average period matches
-                avg_period = conf["dataSourceOptions"]["averagePeriod"]
-                query += f'\r\n\t\t and "DATASTREAMS"."PROPERTIES"->>\'averagePeriod\' = \'{avg_period}\''
-
-            query += ";"
-            datastreams = self.sta.dataframe_from_query(query)
-            sensor_dataframes = []
-            for idx, ds in datastreams.iterrows():
-                # ds is a dict with 'varname', 'datastream_id' and 'data_type'
-                datastream_id = ds["datastream_id"]
-                varname = ds["varname"]
-                if variables and varname not in variables:
-                    rich.print(f"[yellow]Ignoring variable {varname}")
-                    continue
-
-                # Query all data from the datastream_id during the time range and assign proper variable name
-                if full_data:
-                    q = (
-                        f'''
-                        select timestamp, value as "{varname}", qc_flag as "{varname + "_QC"}" 
-                        from timeseries 
-                        where datastream_id = {datastream_id}
-                        and timestamp between \'{time_start}\' and \'{time_end}\';                     
-                        '''
-                    )
-                else:
-                    # Query the regular OBSERVATIONS table
-                    q = (f'''
-                        select
-                            "PHENOMENON_TIME_START" as timestamp,
-                            "RESULT_NUMBER" as "{varname}",
-                            "RESULT_QUALITY"->>'qc_flag' as "{varname + "_QC"}",
-                            "RESULT_QUALITY"->>'stdev' as "{varname + "_STD"}"
-                        from
-                            "OBSERVATIONS"
-                        where
-                            "DATASTREAM_ID" = {datastream_id}
-                            and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
-                    ''')
-                df = self.sta.dataframe_from_query(q, debug=False)
-                sensor_dataframes.append(df)
-            df = merge_dataframes_by_columns(sensor_dataframes)
-            df = df.set_index("timestamp")
             rich.print(f"[cyan]{sensor_name} data from {time_start} to {time_end}")
             dataframes.append(df)
             m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
@@ -226,6 +248,37 @@ class DataCollector:
 
         # We should return (file, url), but we don't have url yet
         return filename, None, "NetCDF"
+
+    def csv_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder, csv_file=""):
+        """
+        Generates a NetCDF file from a SensorThings Database
+        :param conf:
+        :return:
+        """
+        rich.print("[cyan]Generating CSV from a SensorThings API file")
+        rich.print("processing data_source_options...")
+
+        filename = conf["#id"] + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".csv"
+        filename = os.path.join(out_folder, filename)
+
+        station = self.mc.get_document("stations", conf["@stations"])
+        dataframes = []  # list with a dataframe per variable
+
+        for sensor_name in conf["@sensors"]:
+            sensor = self.mc.get_document("sensors", sensor_name)
+            df = self.dataframe_from_sta(conf, station, sensor, time_start, time_end)
+
+            if len(conf["@sensors"]) > 1:
+                df["SENSOR"] = sensor_name
+
+            rich.print(f"[cyan]{sensor_name} data from {time_start} to {time_end}")
+            dataframes.append(df)
+        df = merge_dataframes(dataframes)
+        print(df)
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        df.to_csv(filename)
+
+        return filename, None, "CSV"
 
     def zip_from_filesystem(self, conf, time_start, time_end, out_folder) -> str:
         """
@@ -278,7 +331,6 @@ class DataCollector:
         dest_path = os.path.join(conf["export"]["path"], dataset_id)
         filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".zip"
         filename = os.path.join(dest_path, filename)
-
 
         rich.print(f"creating folders...", end="")
         run_subprocess(["ssh", conf["export"]["host"], f"mkdir -p {dest_path}"])
@@ -457,4 +509,3 @@ def call_generator(dataframes, metadata, output="output.nc", generator_path="../
     [os.remove(f) for f in csv_files]
     [os.remove(f) for f in meta_files]
     rich.print("[green]ok!")
-

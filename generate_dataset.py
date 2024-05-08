@@ -59,7 +59,8 @@ def calculate_time_intervals(time_start: str, time_end: str, periodicity=""):
     return intervals
 
 
-def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder: str, secrets, periodicity="", ckan=False) -> list:
+def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder: str, secrets, periodicity="",
+                     ckan=False, format:str= "") -> list:
     """
     Generate a dataset following the configuration in the MongoDB dataset register.
     :param dataset_id: id of the dataset register
@@ -89,7 +90,7 @@ def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder
     intervals = calculate_time_intervals(time_start, time_end, periodicity=periodicity)
     datasets = []
     for tstart, tend in intervals:
-        dataset = dc.generate(dataset_id, tstart, tend, out_folder, ckan=ckan)
+        dataset = dc.generate(dataset_id, tstart, tend, out_folder, ckan=ckan, format=format)
         datasets.append(dataset)
 
     rich.print("The following datasets have been generated:")
@@ -112,8 +113,12 @@ if __name__ == "__main__":
                                                   "single big file will be generated", type=str,
                            required=False, default="")
 
+    argparser.add_argument("-f", "--format",type=str,  required=False, default="",
+                           help="Suggest format such as netcdf, csv, etc. May not work for all datasets")
+
     args = argparser.parse_args()
     tstart, tend = args.time_range.split("/")
 
-    generate_dataset(args.dataset_id, tstart, tend,  args.output, args.secrets, periodicity=args.period, ckan=args.ckan)
+    generate_dataset(args.dataset_id, tstart, tend,  args.output, args.secrets, periodicity=args.period, ckan=args.ckan,
+                     format=args.format)
 

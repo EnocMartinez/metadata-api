@@ -204,11 +204,12 @@ __organizations = {
                 "type": "string"
             }
         },
+        "public": {"type": "boolean"},
         "ROR": {"type": "string"},
         "EDMO": {"type": "string"},
         "logoUrl": {"type": "string"}
     },
-    "required": ["fullName", "acronym", "alternativeNames"]
+    "required": ["fullName", "acronym", "alternativeNames", "public"]
 }
 
 # ------------------------------------------------- #
