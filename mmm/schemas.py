@@ -511,6 +511,26 @@ __projects = {
     "required": ["acronym", "title", "totalBudget", "type", "funding", "dateStart", "dateEnd"]
 }
 
+
+# This class represents scientific experiments / programmes, such as long-term monitoring of a station or specific
+# scientific experiments on a particular area. This will be converted as a FeatureOfInterest in SensorThings API, so
+# Observations can be queried via programme.
+__programmes = {
+    "$id": "mmm:resources",
+    "type": "object",
+    "properties": {
+        "description": {"type": "string"},  # description of the experiment
+        "@projects": {  # List of projects funding this experiment
+            "type": "array",
+            "items": {"type": "string"}
+        },
+        "geoJsonFeature": {  # GeoJson Feature delimiting the area of Interest
+            "type": "object"
+        }
+    },
+    "required": ["description", "@projects", "geoJsonFeature"]
+}
+
 mmm_schemas = {
     "people": __people,
     "organizations": __organizations,
@@ -524,5 +544,6 @@ mmm_schemas = {
     "activities": __activities,
     "projects": __projects,
     "processes": __processes,
-    "resources": __resources
+    "resources": __resources,
+    "programmes": __programmes
 }

@@ -182,13 +182,27 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
     things_ids = {}
     location_ids = {}
     obs_props_ids = {}
+
+    # Convert "programmes" into "FeaturesOfInterest"
+    programmes = mc.get_documents("programmes")
+    for programme in programmes:
+        programme_id = programme["#id"]
+        rich.print(f"[gold1]Creating FeatureOfInterest {programme_id}")
+        foi = FeatureOfInterest(
+            programme_id,
+            programme["description"],
+            programme["geoJsonFeature"]
+        )
+        import json
+        rich.print(json.dumps(foi.data, indent=2))
+        foi.register(url, update=update, verbose=True)
+
     sensors = mc.get_documents("sensors")
     if "sensors" in collections:
         for doc in sensors:
             sensor_id = doc["#id"]
             name = doc["#id"]
             description = doc["description"]
-
             keys = ["longName", "serialNumber", "instrumentType", "manufacturer", "model"]
             properties = get_properties(doc, keys)
             s = Sensor(name, description, metadata="", properties=properties)

@@ -133,7 +133,8 @@ class MetadataCollector:
         self.db_history = self.__connection[self.history_database_name]  # database with all archived versions
         # To create new collections, add them here
         self.collection_names = ["sensors", "stations", "variables", "qualityControl", "people", "units", "processes",
-                                 "organizations", "datasets", "operations", "activities", "projects", "resources"]
+                                 "organizations", "datasets", "operations", "activities", "projects", "resources",
+                                 "programmes"]
         if ensure_ids:
             self.__ensure_ids()  # make sure that all elements have a unique #id
 
