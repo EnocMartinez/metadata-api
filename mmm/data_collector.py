@@ -11,7 +11,7 @@ created: 30/11/22
 import pandas as pd
 
 from .ckan import CkanClient
-from .common import run_subprocess, check_url
+from .common import run_subprocess, check_url, detect_common_path
 from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
@@ -286,14 +286,10 @@ class DataCollector:
 
         Required options:
             dataSourceOptions:
-               url: URL used to register the data
                path: filesystem raw path (base path for the URL)
-               host: remote server
         """
         # First step, get all files indexed in the SensorThings database
         datastream_ids = []
-        baseurl = conf["dataSourceOptions"]["url"]
-        basepath = conf["dataSourceOptions"]["path"]
 
         for sensor in conf["@sensors"]:
             sensor_id = self.sta.sensor_id_name[sensor]
@@ -320,13 +316,25 @@ class DataCollector:
 
         files = list(df["files"].values)  # List of all files to be compressed
 
-        # Now convert the file URL to a filesystem path
+        if len(files) < 1:
+            rich.print(f"[red]No files to be zipped!")
+            exit()
 
-        files = [f.replace(baseurl, basepath) for f in files]
+        # Now convert the file URLs to filesystem paths
+        files = [self.fileserver.url2path(f) for f in files]
 
+        # Try to remove path until the sensor name
+        basepath = detect_common_path(files)
+        rich.print(f"Base path for all files is {basepath}")
+        # If common prefix goes beyond the sensor name, shorten it, we want to keep the sensor name
+        if sensor in basepath:
+            basepath = basepath.split(sensor)[0]
+        rich.print(f"Final base path for all files is {basepath}")
+
+        # Erase basepath, so we keep the basepath
+        files = [f.replace(basepath, "") for f in files]
         file_type = files[0].split(".")[-1]
 
-        # source_path = conf["dataSourceOptions"]["path"]
         dataset_id = conf["#id"]
         dest_path = os.path.join(conf["export"]["path"], dataset_id)
         filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".zip"
@@ -336,12 +344,28 @@ class DataCollector:
         run_subprocess(["ssh", conf["export"]["host"], f"mkdir -p {dest_path}"])
         rich.print("[green]done!")
 
-        cmd = f"zip -r {filename} {' '.join(files)}"
-        rich.print(f"creating zip file with {len(files)} (this may take a while)...", end="")
-        run_subprocess(["ssh", conf["export"]["host"], cmd])
+        # If the command is too long it cannot be sent via ssh and will raise an OSError, we create a temporal script
+        # with the command and send it to the host
+        script_name = os.path.basename(filename).split(".")[0] + ".sh"
+        rich.print(f"[blue]Creating zip script {script_name}...")
+        cmd = f"cd {basepath} && zip -r {filename} {' '.join(files)}"
+        with open(script_name, "w") as f:
+            f.write(cmd)  # write the command to the script
+        os.chmod(script_name, 0o775)
+        rich.print(f"[blue]Delivering zip script...")
+        script_dest = os.path.join(f"/var/tmp/{script_name}")
+        self.fileserver.send_file("/var/tmp", script_name)
+
+        rich.print(f"creating zip file with {len(files)} files, this may take a while...", end="")
+        run_subprocess(["ssh", conf["export"]["host"], script_dest])
         rich.print("[green]done!")
 
         dataset_url = self.fileserver.path2url(filename)
+
+        rich.print("Removing local script...")
+        os.remove(script_name)
+        rich.print("Removing remote script...")
+        run_subprocess(["ssh", conf["export"]["host"], f"rm {script_dest}"])
 
         return filename, dataset_url, file_type
 

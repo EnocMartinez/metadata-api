@@ -271,3 +271,26 @@ def check_url(url):
             return False
     except requests.ConnectionError:
         return False
+
+
+def detect_common_path(paths):
+    """
+    Returns the common prefix in a list of strings
+    """
+
+    path_splits = [p.split("/") for p in paths]  # list of lists of paths
+    i = -1
+    loop = True
+    while loop:
+        i += 1
+        compare = path_splits[0][i]
+        for p in path_splits[1:]:
+            if len(p) <= i or compare != p[i]:
+                loop = False
+                break
+
+    common_path = "/".join(path_splits[0][:i]) + "/"
+    return common_path
+
+
+
