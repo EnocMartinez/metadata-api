@@ -334,7 +334,7 @@ __datasets = {
             "properties": {
                 "@projects": {
                     "type": "array",
-                    "items": { "type": "string" }
+                    "items": {"type": "string"}
                 }
             },
             "required": ["@projects"]

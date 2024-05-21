@@ -60,7 +60,7 @@ def calculate_time_intervals(time_start: str, time_end: str, periodicity=""):
 
 
 def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder: str, secrets, periodicity="",
-                     ckan=False, format:str= "") -> list:
+                     ckan=False, force=False, format:str= "") -> list:
     """
     Generate a dataset following the configuration in the MongoDB dataset register.
     :param dataset_id: id of the dataset register
@@ -90,13 +90,8 @@ def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder
     intervals = calculate_time_intervals(time_start, time_end, periodicity=periodicity)
     datasets = []
     for tstart, tend in intervals:
-        dataset = dc.generate(dataset_id, tstart, tend, out_folder, ckan=ckan, format=format)
+        dataset = dc.generate(dataset_id, tstart, tend, out_folder, ckan=ckan, format=format, force=force)
         datasets.append(dataset)
-
-    rich.print("The following datasets have been generated:")
-    for ds in datasets:
-        rich.print(f"   {ds}")
-
     return datasets
 
 
@@ -105,6 +100,7 @@ if __name__ == "__main__":
     argparser.add_argument("dataset_id", help="Dataset ID", type=str)
     argparser.add_argument("-o", "--output", help="Folder where datasets will be stored", type=str, default="")
     argparser.add_argument("-c", "--ckan", help="Export to CKAN", action="store_true")
+    argparser.add_argument("-F", "--force", help="Overwrite any existing dataset", action="store_true")
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
                            default="secrets.yaml")
     argparser.add_argument("-t", "--time-range", help="Time range with ISO notation, like 2022-01-01/2023-01-01",
@@ -120,5 +116,5 @@ if __name__ == "__main__":
     tstart, tend = args.time_range.split("/")
 
     generate_dataset(args.dataset_id, tstart, tend,  args.output, args.secrets, periodicity=args.period, ckan=args.ckan,
-                     format=args.format)
+                     format=args.format, force=args.force)
 

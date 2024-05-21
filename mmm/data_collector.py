@@ -38,7 +38,7 @@ class DataCollector:
         self.fileserver = FileServer(secrets["fileserver"])
 
     def generate(self, dataset_id: str, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder: str,
-                 ckan: CkanClient, format="") -> str:
+                 ckan: CkanClient, force=False, format="") -> str:
         """
         Generates a dataset based on its configuration stored in MongoDB
         :param dataset_id: #id of the dataset
@@ -61,27 +61,18 @@ class DataCollector:
                 rich.print(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
 
         if conf["dataSource"] == "sensorthings":
-
             if format.lower() == "csv":
-                dataset_file, dataset_url, file_type = self.csv_from_sta(conf, time_start, time_end, out_folder)
+                dataset_file, dataset_url, file_type = self.csv_from_sta(conf, time_start, time_end, out_folder, force)
+            elif format.lower() in ["nc", "netcdf"]:
+                dataset_file, dataset_url, file_type = self.netcdf_from_sta(conf, time_start, time_end, out_folder, force)
             else:
-                dataset_file, dataset_url, file_type = self.netcdf_from_sta(conf, time_start, time_end, out_folder)
+                raise ValueError(f"Unknwon format '{format}'")
 
         elif conf["dataSource"] == "filesystem":
-            dataset_file, dataset_url, file_type = self.zip_from_filesystem(conf, time_start, time_end, out_folder)
+            dataset_file, dataset_url, file_type = self.zip_from_filesystem(conf, time_start, time_end, out_folder, force)
 
         else:
             raise ValueError(f"data_source='{conf['dataSource']}' not implemented")
-
-        if not dataset_url:
-            if "export" in conf.keys():
-                path = conf["export"]["path"]
-                rich.print(f"this is the path {path}")
-                path = os.path.join(path, dataset_id)  # append dataset_id to the path
-                rich.print(f"new path {path}")
-                dataset_url = self.fileserver.send_file(path, dataset_file)
-            else:
-                rich.print(f"[red]ERROR! export required, but no export parameters have been set")
 
         if not check_url(dataset_url):
             raise ValueError(f"Dataset URL not reachable: {dataset_url}")
@@ -99,13 +90,13 @@ class DataCollector:
                 raise ValueError(f"Datset {package_id} not published in CKAN!")
 
             # Make filename without extension the resource ID
-            resource_id = os.path.basename(dataset_file).split(".")[0]
+            resource_id = os.path.basename(dataset_file).replace(".", "_")
 
             start_date = time_start.strftime("%Y-%m-%d")
             end_date = time_end.strftime("%Y-%m-%d")
 
-            description = f"data from {start_date} to {end_date}"
-            name = f"data from {start_date} to {end_date}"
+            description = f"{file_type} data from {start_date} to {end_date}"
+            name = f"{file_type} data from {start_date} to {end_date}"
 
             r = ckan.resource_create(
                 package_id,
@@ -120,7 +111,17 @@ class DataCollector:
 
         return dataset_file, dataset_url
 
-    def dataframe_from_sta(self, conf: dict, station: dict , sensor: dict, time_start: pd.Timestamp, time_end: pd.Timestamp):
+    def dataframe_from_sta(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
+                           time_end: pd.Timestamp):
+        if conf["dataType"] == "timeseries":
+            return self.dataframe_from_sta_timeseries(conf, station, sensor, time_start, pd.Timestamp)
+        elif conf["dataType"] == "detections":
+            return self.dataframe_from_sta_detections(conf, station, sensor, time_start, pd.Timestamp)
+        else:
+            raise ValueError(f"Unimplemented data type {conf['dataType']}")
+
+    def dataframe_from_sta_detections(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
+                                      time_end: pd.Timestamp):
         """
         Returns a DataFrame for a specific Sensor in a specific time interval
         """
@@ -129,6 +130,98 @@ class DataCollector:
         sensor_name = sensor["#id"]
         station_name = station["#id"]
 
+        variables = []  # by default all variables will be used
+        if "@variables" in conf.keys():
+            variables = conf["@variables"]
+
+        rich.print(f"[orange1]Getting datastreams from station={station_name} sensor={sensor_name} fullData={full_data}")
+        rich.print(f"[orange1]dataType='{data_type}'")
+
+        # Get the THING_ID from SensorThings based on the Station name
+        thing_id = self.sta.value_from_query(
+            f'select "ID" from "THINGS" where "NAME" = \'{station_name}\';'
+        )
+        sensor_id = self.sta.value_from_query(
+            f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';'
+        )
+
+        # select * from "DATASTREAMS"
+        # 	where "SENSOR_ID" = (select "ID" from "SENSORS" where "NAME" = 'IPC608_8B64_165')
+        # 	and "PROPERTIES"->>'modelName' = 'YOLOv8l_18sp_2361img'
+        # 	and "PROPERTIES"->>'dataType' = 'detections'
+        # 	and "PROPERTIES"->>'standardName' = 'Coris julis'
+        # ;
+
+        # Super query that returns all varname and datastream_id  for one station-sensor combination
+        # Results are stored as a DataFrame
+        query = f'''select 
+                "OBS_PROPERTIES"."NAME" as varname, 
+                "DATASTREAMS"."ID" as datastream_id                    
+            from  
+                "DATASTREAMS"
+            where 
+                "DATASTREAMS"."SENSOR_ID" = {sensor_id} and "DATASTREAMS"."THING_ID" = {thing_id} 
+                and "DATASTREAMS"."PROPERTIES"->>'dataType' = '{data_type}'
+                and ("DATASTREAMS"."PROPERTIES"->>'fullData')::boolean = {full_data}                    
+            '''
+
+        if not full_data:
+            # if we are dealing with an average, we need to make sure that the average period matches
+            avg_period = conf["dataSourceOptions"]["averagePeriod"]
+            query += f'\r\n\t\t and "DATASTREAMS"."PROPERTIES"->>\'averagePeriod\' = \'{avg_period}\''
+
+        query += ";"
+        datastreams = self.sta.dataframe_from_query(query)
+        sensor_dataframes = []
+        for idx, ds in datastreams.iterrows():
+            # ds is a dict with 'varname', 'datastream_id' and 'data_type'
+            datastream_id = ds["datastream_id"]
+            varname = ds["varname"]
+            if variables and varname not in variables:
+                rich.print(f"[yellow]Ignoring variable {varname}")
+                continue
+
+            # Query all data from the datastream_id during the time range and assign proper variable name
+            if full_data:
+                q = (
+                    f'''
+                    select timestamp, value as "{varname}", qc_flag as "{varname + "_QC"}" 
+                    from timeseries 
+                    where datastream_id = {datastream_id}
+                    and timestamp between \'{time_start}\' and \'{time_end}\';                     
+                    '''
+                )
+            else:
+                # Query the regular OBSERVATIONS table
+                q = (f'''
+                    select
+                        "PHENOMENON_TIME_START" as timestamp,
+                        "RESULT_NUMBER" as "{varname}",
+                        "RESULT_QUALITY"->>'qc_flag' as "{varname + "_QC"}",
+                        "RESULT_QUALITY"->>'stdev' as "{varname + "_STD"}"
+                    from
+                        "OBSERVATIONS"
+                    where
+                        "DATASTREAM_ID" = {datastream_id}
+                        and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
+                ''')
+            df = self.sta.dataframe_from_query(q, debug=False)
+            sensor_dataframes.append(df)
+        df = merge_dataframes_by_columns(sensor_dataframes)
+        df = df.set_index("timestamp")
+        df = df.sort_index(ascending=True)
+        return df
+
+
+    def dataframe_from_sta_timeseries(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
+                                      time_end: pd.Timestamp):
+        """
+        Returns a DataFrame for a specific Sensor in a specific time interval
+        """
+
+        data_type = conf["dataType"]
+        sensor_name = sensor["#id"]
+        station_name = station["#id"]
 
         variables = []  # by default all variables will be used
         if "@variables" in conf.keys():
@@ -214,7 +307,7 @@ class DataCollector:
         df = df.sort_index(ascending=True)
         return df
 
-    def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder, csv_file=""):
+    def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder, force):
         """
         Generates a NetCDF file from a SensorThings Database
         :param conf:
@@ -222,9 +315,16 @@ class DataCollector:
         """
         rich.print("[cyan]Generating NetCDF from a SensorThings API file")
         rich.print("processing data_source_options...")
+        dataset_id = conf["#id"]
+        filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".nc"
+        local_file = os.path.join(out_folder, filename)
+        remote_path = os.path.join(conf["export"]["path"], dataset_id)
+        remote_file = os.path.join(remote_path, filename)
+        dataset_url = self.fileserver.path2url(remote_file)
 
-        filename = conf["#id"] + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".nc"
-        filename = os.path.join(out_folder, filename)
+        if not force and check_url(dataset_url):
+            rich.print(f"[yellow]Dataset already exists! URL: {dataset_url}")
+            return filename, dataset_url, "NetCDF"
 
         station = self.mc.get_document("stations", conf["@stations"])
 
@@ -244,22 +344,32 @@ class DataCollector:
             m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
             metadata.append(m)
 
-        call_generator(dataframes, metadata, output=filename)
+        call_generator(dataframes, metadata, output=local_file)
+
+        rich.print("Delivering NetCDF dataset file ...")
+        self.fileserver.send_file(remote_path, local_file)
 
         # We should return (file, url), but we don't have url yet
-        return filename, None, "NetCDF"
+        return filename, dataset_url, "NetCDF"
 
-    def csv_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder, csv_file=""):
+    def csv_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder, force):
         """
-        Generates a NetCDF file from a SensorThings Database
+        Generates a CSV file from a SensorThings Database
         :param conf:
         :return:
         """
         rich.print("[cyan]Generating CSV from a SensorThings API file")
         rich.print("processing data_source_options...")
+        dataset_id = conf["#id"]
+        filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".csv"
+        local_file = os.path.join(out_folder, filename)
+        remote_path = os.path.join(conf["export"]["path"], dataset_id)
+        remote_file = os.path.join(remote_path, filename)
+        dataset_url = self.fileserver.path2url(remote_file)
 
-        filename = conf["#id"] + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".csv"
-        filename = os.path.join(out_folder, filename)
+        if not force and check_url(dataset_url):
+            rich.print(f"[yellow]Dataset already exists! URL: {dataset_url}")
+            return filename, dataset_url, "CSV"
 
         station = self.mc.get_document("stations", conf["@stations"])
         dataframes = []  # list with a dataframe per variable
@@ -274,13 +384,15 @@ class DataCollector:
             rich.print(f"[cyan]{sensor_name} data from {time_start} to {time_end}")
             dataframes.append(df)
         df = merge_dataframes(dataframes)
-        print(df)
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        df.to_csv(filename)
+        os.makedirs(os.path.dirname(local_file), exist_ok=True)
+        df.to_csv(local_file)
 
-        return filename, None, "CSV"
+        rich.print("Delivering CSV dataset file ...")
+        self.fileserver.send_file(remote_path, local_file)
 
-    def zip_from_filesystem(self, conf, time_start, time_end, out_folder) -> str:
+        return filename, dataset_url, "CSV"
+
+    def zip_from_filesystem(self, conf, time_start, time_end, out_folder, force) -> str:
         """
         Compresses all files in the fileserver into a zip file.
 
@@ -288,6 +400,12 @@ class DataCollector:
             dataSourceOptions:
                path: filesystem raw path (base path for the URL)
         """
+
+        dataset_id = conf["#id"]
+        dest_path = os.path.join(conf["export"]["path"], dataset_id)
+        filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".zip"
+        filename = os.path.join(dest_path, filename)
+
         # First step, get all files indexed in the SensorThings database
         datastream_ids = []
 
@@ -327,18 +445,19 @@ class DataCollector:
         basepath = detect_common_path(files)
         rich.print(f"Base path for all files is {basepath}")
         # If common prefix goes beyond the sensor name, shorten it, we want to keep the sensor name
-        if sensor in basepath:
-            basepath = basepath.split(sensor)[0]
+        if sensor.lower() not in basepath.lower():
+            idx = basepath.lower().find(sensor.lower())
+            basepath = basepath[:idx]
         rich.print(f"Final base path for all files is {basepath}")
 
         # Erase basepath, so we keep the basepath
         files = [f.replace(basepath, "") for f in files]
         file_type = files[0].split(".")[-1]
 
-        dataset_id = conf["#id"]
-        dest_path = os.path.join(conf["export"]["path"], dataset_id)
-        filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".zip"
-        filename = os.path.join(dest_path, filename)
+        dataset_url = self.fileserver.path2url(filename)
+        if not force and check_url(dataset_url):
+            rich.print(f"[yellow]Dataset already exists! URL: {dataset_url}")
+            return filename, dataset_url, file_type
 
         rich.print(f"creating folders...", end="")
         run_subprocess(["ssh", conf["export"]["host"], f"mkdir -p {dest_path}"])
@@ -359,8 +478,6 @@ class DataCollector:
         rich.print(f"creating zip file with {len(files)} files, this may take a while...", end="")
         run_subprocess(["ssh", conf["export"]["host"], script_dest])
         rich.print("[green]done!")
-
-        dataset_url = self.fileserver.path2url(filename)
 
         rich.print("Removing local script...")
         os.remove(script_name)

@@ -20,6 +20,20 @@ from mmm.processes import average_process, inference_process
 from stadb import SensorThingsApiDB
 
 
+def get_properties(doc: dict, properties: list) -> dict:
+    """
+    Create a new dict with some of the properties from doc
+    :param doc: original doc
+    :param properties: params to copy (keys)
+    :return: dict with copies
+    """
+    assert (type(doc) is dict)
+    assert (type(properties) is list)
+    data = {}
+    for p in properties:
+        data[p] = doc[p]
+    return data
+
 def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
     """
     Propagates metadata in MongoDB to CKAN
@@ -152,21 +166,6 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
                                   groups=groups)
 
 
-def get_properties(doc: dict, properties: list) -> dict:
-    """
-    Create a new dict with some of the properties from doc
-    :param doc: original doc
-    :param properties: params to copy (keys)
-    :return: dict with copies
-    """
-    assert (type(doc) is dict)
-    assert (type(properties) is list)
-    data = {}
-    for p in properties:
-        data[p] = doc[p]
-    return data
-
-
 def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, url, update=True, authentication=""):
     """
     Propagates info at MetadataCollctor the SensorThings API
@@ -177,6 +176,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
     # Stations as thing
     if "all" in collections:
         collections = mc.collection_names
+    rich.print(f"Propagating collections {collections}")
 
     sensor_ids = {}  # key: mongodb #id, value: sensorthings ID
     things_ids = {}
@@ -343,7 +343,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
 
 
 def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: str, sensor_name: str, data_type,
-                   average="") -> bool:
+                   foi_id: int, average="") -> bool:
     """
     This function performs a bulk load of the data contained in the input file
     """
@@ -393,7 +393,7 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         print(df)
 
     db = SensorThingsApiDB(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
-                                 psql_conf["password"], logging.getLogger())
+                                 psql_conf["password"], logging.getLogger(), timescaledb=True)
 
     # Get the datastream names
     sensor_id = db.sensor_id_name[sensor_name]
@@ -429,8 +429,6 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
             raise ValueError("No datastreams found for this dataset!")
 
         rich.print(f"station name: {station_name}")
-
-        foi_id = db.value_from_query(f'select "ID" from "FEATURES" where "NAME" = \'{station_name}\';')
         db.inject_to_observations(df, datastreams, url, foi_id, average, profile=True)
 
     elif data_type == "profiles" and not average:
@@ -472,7 +470,6 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         rich.print("[green]start data bulk load")
 
         rich.print(f"station name: {station_name}")
-        foi_id = db.value_from_query(f'select "ID" from "FEATURES" where "NAME" = \'{station_name}\';')
         db.inject_to_observations(df, datastreams, url, foi_id, average)
 
     else:
