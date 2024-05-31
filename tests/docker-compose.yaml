@@ -1,0 +1,89 @@
+services:
+#------------------------------------------------#
+# FROST-Server
+#------------------------------------------------#
+  sta:
+    image: fraunhoferiosb/frost-server:latest
+    container_name: sta-test
+    depends_on:
+      sta_db:
+        condition: service_healthy
+    environment:
+      - persistence_db_username=sensorthings
+      - persistence_db_password=ChangeMe
+      - serviceRootUrl=http://localhost:8080/FROST-Server
+      - persistence_db_url=jdbc:postgresql://sta_db:5432/sensorthings
+      - maxTop=100000
+      - http_cors_enable=true
+      - http_cors_allowed.origins=*
+      - persistence_db_driver=org.postgresql.Driver
+      - persistence_autoUpdateDatabase=true
+      - maxDataSize=50000000 # default is 25 MB, upgraded to 50
+      - enableMultiDatastream=false
+      - enableActuation=false
+      - bus_workerPoolSize=50  ## max 50 threads
+      - bus_queueSize=10000000  # 10 MB (default is unknown)
+      - mqtt_Enabled=false
+    ports:
+      - 8080:8080
+
+#------------------------------------------------#
+# SensorThings Database from TimscaleDB HA image
+#------------------------------------------------#
+  sta_db:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    image: postgres_postgis_timescaledb:local
+    container_name: sta-db-test
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=DifferentPwd
+      - sta_db_user=sensorthings
+      - sta_db_name=sensorthings
+      - sta_db_password=ChangeMe
+    ports:
+      - 5432:5432
+    volumes:
+      - ./tmpdata:/tmp/sta_db_copy/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready", "-d", "sensorthings" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 120s
+
+  mmapi-db:
+    image: mongodb/mongodb-community-server:7.0.1-ubuntu2204
+    container_name: mmapi-db-test
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGODB_INITDB_ROOT_USERNAME=testuser
+      - MONGODB_INITDB_ROOT_PASSWORD=complexpassword
+      - mmapi_connection="mongodb://testuser:complexpassword@mmapi-db:27017"
+      - mmapi_database="metadata"
+      - mmapi_default_author="enoc_martinez"
+      - mmapi_organization="UPC"
+      - mmapi_port=5000
+
+  pgadmin:
+    image: dpage/pgadmin4:7.8
+    container_name: pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=superpass
+      - PGADMIN_DISABLE_POSTFIX=true
+    ports:
+      - 80:80
+
+  fileserver:
+    image: nginx:1.25.3-alpine-slim
+    container_name: fileserver
+    ports:
+      - 8082:80
+    volumes:
+      - ./fileserver:/data/files:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf
+

@@ -8,8 +8,10 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 30/11/22
 """
-import pandas as pd
+import logging
 
+import pandas as pd
+from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
 from .common import run_subprocess, check_url, detect_common_path
 from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes
@@ -18,7 +20,10 @@ from .fileserver import FileServer
 import rich
 import os
 import json
-from stadb import SensorThingsApiDB
+
+
+def init_data_collector(secrets: dict, log: logging.Logger, mc: MetadataCollector = None, sta: SensorThingsApiDB = None):
+    return DataCollector(secrets, log, mc=mc, sta=sta)
 
 
 class DataCollector:

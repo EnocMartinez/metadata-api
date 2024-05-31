@@ -17,6 +17,8 @@ import jsonschema
 import pandas as pd
 import os
 
+from mmm.common import YEL, RST, load_fields_from_dict
+
 try:
     from mmm.schemas import mmm_schemas, mmm_metadata
 except ImportError:
@@ -257,7 +259,7 @@ class MetadataCollector:
             author = self.default_author
 
         if collection not in self.collection_names:
-            self.collection_names.append(collection)
+            raise ValueError(f"Collection {collection} not valid!")
 
         if document["#id"] in self.get_identifiers(collection):
             if update:
@@ -267,7 +269,6 @@ class MetadataCollector:
 
         if not force_meta:  # By default generate the metadata
             now = get_timestamp_string()
-            rich.print("Adding metadata to document...")
             new_document = {
                 "#id": document["#id"],
                 "#version": 1,
@@ -687,5 +688,115 @@ class MetadataCollector:
 
         raise LookupError(f"Deployment for station={station_name} not found!")
 
+    def drop_all(self):
+        """
+        Deletes ALL documents from ALL collections, USE WITH CAUTION!
+        """
+        for col in self.collection_names:
+            docs = self.get_documents(col)
+            for doc in docs:
+                self.delete_document(col, doc["#id"])
 
 
+def get_station_deployments(mc: MetadataCollector, sensor_doc: dict) -> list:
+    """
+    Looks for all stations where a sensor has been deployed. Returns a list of tuple
+    [
+        (station1, date1),
+        (station2, date2),
+        ...
+    ]
+    """
+    assert type(mc) is MetadataCollector
+    assert type(sensor_doc) is dict
+    sensor_name = sensor_doc["#id"]
+    deployments = []  # array of (stationId, deploymentTime)
+
+    # Get all activities with type=deployment and involving this sensor
+    hist = mc.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@sensors": sensor_name})
+    for dep in hist:
+        deployment_time = dep["time"]
+        # The deployment station can be at the 'appliedTo' or at 'where' section
+        if "@stations" in dep["appliedTo"].keys():
+            station = dep["appliedTo"]["@stations"]
+        elif "@stations" in dep["where"].keys():
+            station = dep["where"]["@stations"]
+        else:
+            raise LookupError(f"Activity {hist['#id']} should include @stations in 'where' or in 'appliedTo'")
+        deployments.append((station, deployment_time))
+
+    if len(deployments) == 0:
+        raise LookupError(f"No deployments found for sensor {sensor_name}")
+    return deployments
+
+
+def get_sensor_deployments(mc: MetadataCollector, sensor_id: str, station="") -> list:
+    """
+    Looks for all stations where a sensor has been deployed. If t
+        [
+        (station1, date1),
+        (station2, date2),
+        ...
+    ]
+    """
+    assert type(mc) is MetadataCollector
+    assert type(sensor_id) is str
+    # Get all activities with type=deployment and involving this sensor
+    deployments = mc.get_documents("activities", mongo_filter={"type": "deployment"})
+    sensor_deployments = []
+    for dep in deployments:
+        if "@sensors" in dep["appliedTo"].keys() and sensor_id in dep["appliedTo"]["@sensors"]:
+            station = dep["where"]["@stations"]
+            deployment_time = dep["time"]
+            sensor_deployments.append((station, deployment_time))
+
+    sensor_deployments = sorted(sensor_deployments, key=lambda x: x[1])
+    return sensor_deployments
+
+
+def get_sensor_latest_deployment(mc: MetadataCollector, sensor_id: str) -> list:
+    """
+    Returns the last station where the sensor was deployed
+    """
+    deployments = get_sensor_deployments(mc, sensor_id)
+    return deployments[-1][0]
+
+
+def get_station_coordinates(mc: MetadataCollector, station: any) -> (float, float, float):
+    """
+    Looks for the latest coordinates of a station based on its deployment history. Station may be station_id (str) or
+    the station document (dict)
+    """
+    if type(station) is str:
+        station = mc.get_document("station", station)
+    elif type(station) is dict:
+        pass
+    else:
+        raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
+    deployments = get_station_deployments(mc, station['#id'])
+
+    for deployment in reversed(deployments):
+        # Get the latest deployment
+        latitude = deployment["where"]["position"]["latitude"]
+        longitude = deployment["where"]["position"]["longitude"]
+        depth = deployment["where"]["position"]["depth"]
+        break
+
+    return latitude, longitude, depth
+
+
+def get_station_history(mc: MetadataCollector, name: str) -> list:
+    """
+    Looks for all activities with the
+    """
+    station_filter = {"appliedTo.@stations": name}
+    activities = mc.get_documents("activities", mongo_filter=station_filter)
+    history = []
+    for a in activities:
+        h = load_fields_from_dict(a, ["time", "type", "description", "where/position"],
+                                  rename={"where/position": "position"})
+        history.append(h)
+
+    # Sort based on history
+    history = sorted(history, key=lambda x: x['time'])
+    return history

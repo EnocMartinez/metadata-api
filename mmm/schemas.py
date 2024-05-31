@@ -41,17 +41,18 @@ __coordinates__ = {
     "required": ["latitude", "longitude", "depth"]
 }
 
+mmapi_data_types = [
+    "timeseries",  # fix-point timeseries
+    "profiles",  # depth-dependant timeseries. Depth is usually stored as integer to simplify indexing
+    # others
+    "files",  # arbitrary file-based data, such as audio, pictures or video.
+    "detections",  # event detections based from other data. An example is fish detections from a picture
+    "inference"  # Output of an AI algorithm, i.e. a list of detected objects by inference
+]
+
 __data_types__ = {
     "type": "string",
-    "enum": [
-        # time-series
-        "timeseries",  # fix-point timeseries
-        "profiles",  # depth-dependant timeseries. Depth is usually stored as integer to simplify indexing
-        # others
-        "files",  # arbitrary file-based data, such as audio, pictures or video.
-        "detections",  # event detections based from other data. An example is fish detections from a picture
-        "inference"    # Output of an AI algorithm, i.e. a list of detected objects by inference
-    ]
+    "enum": mmapi_data_types
 }
 
 __data_sources__ = {
@@ -285,8 +286,15 @@ __stations = {
         "manufacturer": __label_definition,
         "contacts": __contacts_with_roles__(__device_roles__),
         "emsoFacility": {"type": "string"},
+        "defaults": {
+            "type": "object",
+            "properties": {
+                "@programmes":  {"type": "string"}
+            },
+            "required": ["@programmes"]
+        }
     },
-    "required": ["shortName", "longName", "platformType", "contacts"]
+    "required": ["shortName", "longName", "platformType", "contacts", "defaults"]
 }
 
 

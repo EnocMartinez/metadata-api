@@ -14,7 +14,7 @@ from mmm import DataCollector, setup_log, CkanClient
 import yaml
 import rich
 import pandas as pd
-from stadb import SensorThingsApiDB
+from mmm import SensorThingsApiDB
 
 from mmm.fileserver import FileServer
 from mmm.metadata_collector import init_metadata_collector

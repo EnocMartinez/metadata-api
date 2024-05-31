@@ -138,6 +138,9 @@ class LoggerSuperclass:
         mystr = self.__log_colour + "[%s] " % self.__logger_name + str(*args) + RST
         self.__logger.info(mystr)
 
+    def setLevel(self, level):
+        self.__logger.setLevel(level)
+
 
 def reverse_dictionary(data):
     """
@@ -293,4 +296,94 @@ def detect_common_path(paths):
     return common_path
 
 
+def rsync_files(host: str, folder, files: list):
+    """
+    Uses rsync to copy some files to a remote folder
+    """
+    assert type(host) is str, "invalid type"
+    assert type(folder) is str, "invalid type"
+    assert type(files) is list, "invalid type"
+    run_subprocess(["ssh", host, f"mkdir -p {folder} -m=777"], fail_exit=True)
+    run_subprocess(f"rsync -azh {' '.join(files)} {host}:{folder}")
+
+
+def rm_remote_files(host, files):
+    """
+    Runs remove file over ssh
+    """
+    assert type(host) is str, "invalid type"
+    assert type(files) is list, "invalid type"
+    run_subprocess(["ssh", host, f"rm  {' '.join(files)}"], fail_exit=True)
+
+
+def assert_dict(conf: dict, required_keys: dict, verbose=False):
+    """
+    Checks if all the expected keys in a dictionary are there. The expected format is field name as key and type as
+    value:
+        { "name": str, "importantNumber": int}
+
+    One level of nesting is supported:
+    value:
+        { "someData/nestedData": str}
+    expects something like
+        {
+        "someData": {
+            "nestedData": "hi"
+            }
+        }
+
+    :param conf: dict with configuration to be checked
+    :param required_keys: dictionary with required keys
+    :raises: AssertionError if the input does not match required_keys
+    """
+    for key, expected_type in required_keys.items():
+        if "/" in key:
+            pass
+        elif key not in conf.keys():
+            raise AssertionError(f"Required key \"{key}\" not found in configuration")
+
+        # Check for nested dicts
+        if "/" in key:
+            parent, son = key.split("/")
+            if parent not in conf.keys():
+                msg =f"Required key \"{parent}\" not found!"
+                if verbose:
+                    rich.print(f"[red]{msg}")
+                raise AssertionError(msg)
+
+            if type(conf[parent]) != dict:
+                msg = f"Value for key \"{parent}\" wrong type, expected type dict, but got {type(conf[parent])}"
+                if verbose:
+                    rich.print(f"[red]{msg}")
+                raise AssertionError(msg)
+            if son not in conf[parent].keys():
+                msg =f"Required key \"{son}\" not found in configuration/{parent}"
+                if verbose:
+                    rich.print(f"[red]{msg}")
+                raise AssertionError(msg)
+            value = conf[parent][son]
+        else:
+            value = conf[key]
+
+        if type(value) != expected_type:
+            msg = f"Value for key \"{key}\" wrong type, expected type {expected_type}, but got '{type(value)}'"
+            if verbose:
+                rich.print(f"[red]{msg}")
+            raise AssertionError(msg)
+
+
+def environment_from_file(filename):
+    with open(filename) as f:
+        lines = f.readlines()
+
+    lines = [line.strip() for line in lines]
+    environ = os.environ
+    for line in lines:
+        # remove comment
+        line = line.split("#")[0]
+        if "=" in line:
+            key, value = line.split("=")
+            value = value.replace("\'", "").replace("\"", "")
+            environ[key] = value
+    return environ
 

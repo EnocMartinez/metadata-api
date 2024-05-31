@@ -55,7 +55,7 @@ if __name__ == "__main__":
         raise ValueError(f"Unimplemented type!")
 
     rich.print(f"[cyan]Bulk load data from sensor {args.sensor_id} file {args.file}")
-    bulk_load_data(args.file, psql_conf, mc, url, args.sensor_id, data_type, args.foi, average=args.average)
+    bulk_load_data(args.file, psql_conf, url, args.sensor_id, data_type, args.foi, average=args.average)
 
 
 

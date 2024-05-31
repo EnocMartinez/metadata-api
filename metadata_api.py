@@ -23,8 +23,31 @@ app = Flask(__name__)
 CORS(app)
 
 
+def run_metadata_api(secrets, environment, log, mc):
+    if environment:
+        mc = init_metadata_collector_env()
+        import os
+        root_url = os.environ["mmapi_root_url"]
+        port = os.environ["mmapi_port"]
+    elif secrets:
+        with open(secrets) as f:
+            secrets = yaml.safe_load(f)["secrets"]
+            root_url = secrets["mmapi"]["root_url"]
+            port = secrets["mmapi"]["port"]
+    else:
+        raise ValueError("Metadata API needs to be configured using environment variables or yaml file!")
+
+    app.log = log
+    app.log.info("starting Metadata API")
+    # embed MetadataCollector to app
+    app.mc = mc
+    app.mmapi_url = root_url
+    app.run(host="0.0.0.0", port=port, debug=False)
+    return app
+
+
 def api_error(message, code=400):
-    log.error(message)
+    app.log.error(message)
     json_error = {"error": True, "code": code, "message": message}
     return Response(json.dumps(json_error), status=code, mimetype="application/json")
 
@@ -32,21 +55,21 @@ def api_error(message, code=400):
 @app.route('/', methods=['GET'])
 def root():
     return api_error({
-        "message": f"No version defined! try {root_url}/v1.0"
+        "message": f"No version defined! try {app.mmapi_url}/v1.0"
     })
 
 
 @app.route('/v1.0', methods=['GET'])
 @app.route('/v1.0/', methods=['GET'])
 def default_index():
-    d = {c: f"{root_url}/v1.0/{c}" for c in mc.collection_names}
+    d = {c: f"{app.mmapi_url}/v1.0/{c}" for c in app.mc.collection_names}
     return Response(json.dumps(d), status=200, mimetype="application/json")
 
 
 @app.route('/v1.0/<path:collection>', methods=['GET'])
 def get_collection(collection: str):
     try:
-        documents = mc.get_documents(collection)
+        documents = app.mc.get_documents(collection)
     except LookupError:
         return api_error(f"Collection not '{collection}', valid collection names {mc.collection_names}")
     return Response(json.dumps(documents), status=200, mimetype="application/json")
@@ -55,21 +78,21 @@ def get_collection(collection: str):
 @app.route('/v1.0/<path:collection>', methods=['POST'])
 def post_to_collection(collection: str):
     document = json.loads(request.data)
-    log.debug(f"Checking if collection {collection} exists...")
-    if collection not in mc.collection_names:
+    app.log.debug(f"Checking if collection {collection} exists...")
+    if collection not in app.mc.collection_names:
         return api_error(f"Collection not '{collection}', valid collection names {mc.collection_names}")
 
     if "#id" not in document.keys():
         return api_error(f"Field #id not found in document")
 
     document_id = document["#id"]
-    identifiers = mc.get_identifiers(collection)
+    identifiers = app.mc.get_identifiers(collection)
     if document_id in identifiers:
         return api_error(f"Document with #id={document_id} already exists in collection '{collection}'")
 
-    log.info(f"Adding document {document_id} to collection '{collection}'")
+    app.log.info(f"Adding document {document_id} to collection '{collection}'")
     try:
-        inserted_document = mc.insert_document(collection, document)
+        inserted_document = app.mc.insert_document(collection, document)
     except Exception as e:
         return api_error(f"Unexpected error while inserting document: {e}", code=500)
 
@@ -79,20 +102,20 @@ def post_to_collection(collection: str):
 @app.route('/v1.0/<path:collection>/<path:document_id>', methods=['PUT'])
 def put_to_collection(collection: str, document_id: str):
     document = json.loads(request.data)
-    log.debug(f"Checking if collection {collection} exists...")
-    if collection not in mc.collection_names:
+    app.log.debug(f"Checking if collection {collection} exists...")
+    if collection not in app.mc.collection_names:
         return api_error(f"Collection not '{collection}', valid collection names {mc.collection_names}")
 
     if "#id" not in document.keys():
         return api_error(f"Field #id not found in document")
 
-    identifiers = mc.get_identifiers(collection)
+    identifiers = app.mc.get_identifiers(collection)
     if document_id not in identifiers:
         return api_error(f"Document with #id={document_id} does not exist in collection '{collection}', use PUT instead")
 
-    log.info(f"Adding document {document_id} to collection '{collection}'")
+    app.log.info(f"Adding document {document_id} to collection '{collection}'")
     try:
-        inserted_document = mc.replace_document(collection, document_id, document)
+        inserted_document = app.mc.replace_document(collection, document_id, document)
 
     except AssertionError:
         return api_error(f"No changes detected")
@@ -104,12 +127,12 @@ def put_to_collection(collection: str, document_id: str):
 
 @app.route('/v1.0/<path:collection>/<path:identifier>', methods=['GET'])
 def get_by_id(collection: str, identifier: str):
-    if collection not in mc.collection_names:
+    if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
         json_error = {"error": True, "code": 400,  "message": error_msg}
         return Response(json.dumps(json_error), status=400, mimetype="application/json")
     try:
-        document = mc.get_document(collection, identifier)
+        document = app.mc.get_document(collection, identifier)
     except LookupError:
         error_msg = f"Document with #id={identifier} does not exist in collection '{collection}', use PUT instead"
         json_error = {"error": True, "code": 400,  "message": error_msg}
@@ -120,7 +143,7 @@ def get_by_id(collection: str, identifier: str):
 
 @app.route('/v1.0/schemas/<path:collection>', methods=['GET'])
 def get_schema(collection: str):
-    if collection not in mc.collection_names:
+    if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
         json_error = {"error": True, "code": 400,  "message": error_msg}
         return Response(json.dumps(json_error), status=400, mimetype="application/json")
@@ -131,12 +154,12 @@ def get_schema(collection: str):
 
 @app.route('/v1.0/<path:collection>/<path:identifier>/history', methods=['GET'])
 def get_document_history(collection: str, identifier: str):
-    if collection not in mc.collection_names:
+    if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
         json_error = {"error": True, "code": 400,  "message": error_msg}
         return Response(json.dumps(json_error), status=400, mimetype="application/json")
     try:
-        documents = mc.get_document_history(collection, identifier)
+        documents = app.mc.get_document_history(collection, identifier)
     except LookupError:
         error_msg = f"Document with #id={identifier} does not exist in collection '{collection}', use PUT instead"
         json_error = {"error": True, "code": 400,  "message": error_msg}
@@ -146,12 +169,12 @@ def get_document_history(collection: str, identifier: str):
 
 @app.route('/v1.0/<path:collection>/<path:identifier>/history/<path:version>', methods=['GET'])
 def get_history_by_id(collection: str, identifier: str, version: int):
-    if collection not in mc.collection_names:
+    if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
         json_error = {"error": True, "code": 400,  "message": error_msg}
         return Response(json.dumps(json_error), status=400, mimetype="application/json")
     try:
-        document = mc.get_document(collection, identifier, version=version)
+        document = app.mc.get_document(collection, identifier, version=version)
     except LookupError:
         error_msg = f"Document with #id={identifier} does not exist in collection '{collection}', use PUT instead"
         json_error = {"error": True, "code": 400,  "message": error_msg}
@@ -172,7 +195,7 @@ def project_timeline():
     if p and p.lower() == "true":
         show_all = True
 
-    projects = mc.get_documents("projects")
+    projects = app.mc.get_documents("projects")
     # Keep only projects with start and end date
     projects = [p for p in projects if p["dateStart"] and p["dateEnd"]]
     resp = []
@@ -220,21 +243,12 @@ if __name__ == "__main__":
     argparser.add_argument("-s", "--secrets", help="Initialize from secrets yaml file", type=str, default="")
     args = argparser.parse_args()
 
+    with open(args.secrets) as f:
+        secrets = yaml.safe_load(f)["secrets"]
+        root_url = secrets["mmapi"]["root_url"]
+        port = secrets["mmapi"]["port"]
+
+    mc = init_metadata_collector(secrets)
     log = setup_log("Metadata API")
-    if args.environment:
-        mc = init_metadata_collector_env()
-        import os
-        root_url = os.environ["mmapi_root_url"]
-        port = os.environ["mmapi_port"]
-    elif args.secrets:
-        with open(args.secrets) as f:
-            secrets = yaml.safe_load(f)["secrets"]
-            mc = init_metadata_collector(secrets)
-            root_url = secrets["mmapi"]["root_url"]
-            port = secrets["mmapi"]["port"]
-    else:
-        raise ValueError("Metadata API needs to be configured using environment variables or yaml file!")
 
-    log.info("starting Metadata API")
-    app.run(host="0.0.0.0", port=port, debug=True)
-
+    run_metadata_api(secrets, args.environment, log, mc, thread=True)

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Generic database connector class for PostgresQL databases. It includes a built-in logging system (logger)
 
 author: Enoc Martínez
 institution: Universitat Politècnica de Catalunya (UPC)
@@ -8,10 +9,62 @@ license: MIT
 created: 4/10/23
 """
 
-from ..common import LoggerSuperclass
+from ..common import LoggerSuperclass, PRL
 import psycopg2
 import time
 import pandas as pd
+import traceback
+
+
+class Connection(LoggerSuperclass):
+    def __init__(self, host, port, db_name, db_user, db_password, timeout, logger, count):
+        LoggerSuperclass.__init__(self, logger, f"PGCON{count}", colour=PRL)
+        self.info("Creating connection")
+        self.__host = host
+        self.__port = port
+        self.__name = db_name
+        self.__user = db_user
+        self.__pwd = db_password
+        self.__timeout = timeout
+
+        self.__connection_count = count
+
+        self.available = True  # flag that determines if this connection is available or not
+        # Create a connection
+        self.connection = psycopg2.connect(host=self.__host, port=self.__port, dbname=self.__name, user=self.__user,
+                                           password=self.__pwd, connect_timeout=self.__timeout)
+        self.cursor = self.connection.cursor()
+        self.last_used = -1
+
+        self.index = 0
+        self.__closing = False
+
+    def run_query(self, query, description=False, debug=False, fetch=True):
+        """
+        Executes a query and returns the result. If description=True the desription will also be returned
+        """
+        self.available = False
+        if debug:
+            self.debug(query)
+        self.cursor.execute(query)
+        self.connection.commit()
+        if fetch:
+            resp = self.cursor.fetchall()
+            self.available = True
+            if description:
+                return resp, self.cursor.description
+            return resp
+        else:
+            self.available = True
+            return
+
+    def close(self):
+        if not self.__closing:
+            self.__closing = True
+            self.info(f"Closing connection")
+            self.connection.close()
+        else:
+            self.error(f"Someone else is closing connection {self.__connection_count}!")
 
 
 class PgDatabaseConnector(LoggerSuperclass):
@@ -19,66 +72,100 @@ class PgDatabaseConnector(LoggerSuperclass):
     Interface to access a PostgresQL database
     """
 
-    def __init__(self, host, port, db_name, db_user, db_password, logger):
-        LoggerSuperclass.__init__(self, logger, "DB connector")
-        self.host = host
-        self.port = port
-        self.name = db_name
-        self.user = db_user
+    def __init__(self, host, port, db_name, db_user, db_password, logger, timeout=5):
+        LoggerSuperclass.__init__(self, logger, "PostgresQL")
+        self.conn_count = 0
+        self.__host = host
+        self.__port = port
+        self.__name = db_name
+        self.__user = db_user
         self.__pwd = db_password
-
-        self.connection = None
-        self.cursor = None
+        self.__timeout = timeout
+        self.__logger = logger
 
         self.query_time = -1  # stores here the execution time of the last query
         self.db_initialized = False
+        self.connections = []  # list of connections, starts with one
+        self.max_connections = 50
 
-        self.init_db()
+        # Check for the constraints
 
-    def init_db(self):
+    def new_connection(self) -> Connection:
+        self.conn_count += 1
+        c = Connection(self.__host, self.__port, self.__name, self.__user, self.__pwd, self.__timeout, self.__logger,
+                       self.conn_count)
+        self.connections.append(c)
+        return c
+
+    def get_available_connection(self):
+        """
+        Loops through the connections and gets the first available. If there isn't any available create a new one (or
+        wait if connections reached the limit).
+        """
+
+        for i in range(len(self.connections)):
+            c = self.connections[i]
+            if c.available:
+                return c
+
+        while len(self.connections) >= self.max_connections:
+            time.sleep(0.5)
+            self.debug("waiting for conn")
+
+        self.info(f"Creating DB connection {len(self.connections)}..")
+        return self.new_connection()
+
+    def exec_query(self, query, description=False, debug=False, fetch=True, ignore_errors=False):
+        """
+        Runs a query in a free connection
+        """
+        c = self.get_available_connection()
+        results = None
         try:
-            self.connection = psycopg2.connect(host=self.host, port=self.port, dbname=self.name, user=self.user,
-                                               password=self.__pwd)
-            self.cursor = self.connection.cursor()
-            self.db_initialized = True
+            results = c.run_query(query, description=description, debug=debug, fetch=fetch)
+
+        except psycopg2.errors.UniqueViolation as e:
+            # most likely a duplicated key, raise it again
+            c.connection.rollback()
+            c.available = True  # set it to available
+            self.error(f"Exception caught!:\n{traceback.format_exc()}")
+            raise e
+
         except Exception as e:
-            self.error("Can't initialize the database!")
-            self.error(f"Exception {e.__class__.__name__}: {e}", exception=True)
-            self.db_initialized = False
-            return self.db_initialized
+            self.warning(f"Exception caught!:\n{traceback.format_exc()}")
+            self.info(f"Query: {query}")
+            print(f"Query: {query}")
+            self.error(f"Exception in exec_query {e}")
 
-        return self.db_initialized
+            if not ignore_errors:
+                raise e
 
-    def exec_query(self, query, debug=False):
-        """
-        Wrapper to query with psycopg2
-        :param cursor: DB cursor
-        :param query as string
-        :returns nothing
-        """
-        if not self.db_initialized:
-            self.warning("Database is not initialized!, trying to open connection...")
-            if not self.init_db():
-                raise ConnectionError("Database not initialized!")
-            self.info("Database initialized!")
-        if debug:
-            self.debug(f"query: '{query}'")
-        init = time.time()
-        self.cursor.execute(query)
-        self.connection.commit()
-        self.query_time = time.time() - init
+            try:
+                self.warning("closing db connection due to exception")
+                c.close()
+            except Exception as e:  # ignore errors
+                if not ignore_errors:
+                    raise e
+                else:
+                    pass
+            self.error(f"Removing connection")
+            self.connections.remove(c)
+        return results
 
-    def list_from_query(self, query):
+    def list_from_query(self, query, debug=False):
         """
-        Makes a query to the database using a cursor object and returns a list with the reponse
-        :param cursor: database cursor
+        Makes a query to the database using a cursor object and returns a DataFrame object
+        with the reponse
         :param query: string with the query
-        :returns DataFrame with the query result
+        :param debug:
+        :returns list with the query result
         """
-        self.exec_query(query)
-        response = self.cursor.fetchall()
-        # colnames = [desc[0] for desc in self.cursor.description]  # Get the Column names
-        return self.cursor.description
+        r = self.exec_query(query, debug=debug)
+
+        # Avoid to have a list of tuple like [(2,),(3,)], converting to [2,3]
+        if len(r) > 0 and len(r[0]) == 1:
+            r = [e[0] for e in r]
+        return r
 
     def dataframe_from_query(self, query, debug=False):
         """
@@ -89,10 +176,26 @@ class PgDatabaseConnector(LoggerSuperclass):
         :param debug:
         :returns DataFrame with the query result
         """
-        self.exec_query(query, debug=debug)
-        response = self.cursor.fetchall()
-        column_names = [desc[0] for desc in self.cursor.description]  # Get the Column names
-        return pd.DataFrame(response, columns=column_names)
+        response, description = self.exec_query(query, debug=debug, description=True)
+        colnames = [desc[0] for desc in description]  # Get the Column names
+        df = pd.DataFrame(response, columns=colnames)
+        return df
 
     def close(self):
-        self.connection.close()
+        for c in self.connections:
+            c.close()
+
+    def add_constraint(self, constraint_name, query):
+        """
+        Checks if a constraint is already present in pg_constraint table. If not, create it using the query
+        """
+        pg_constraints = self.list_from_query(f"select conname from pg_constraint;")
+        if constraint_name not in pg_constraints:
+            self.exec_query(query, fetch=False)
+
+    def add_index(self, index_name, table_name, query):
+
+        pg_indexes = self.list_from_query(f"select indexname from pg_indexes where tablename = '{table_name}'")
+        if index_name not in pg_indexes:
+            self.exec_query(query, fetch=False)
+

@@ -10,14 +10,15 @@ created: 27/10/23
 """
 import logging
 import pandas as pd
-from mmm import MetadataCollector, CkanClient
+from mmm import MetadataCollector, CkanClient, SensorThingsApiDB
 import rich
 from mmm.common import load_fields_from_dict, YEL, RST
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
 from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream, \
     HistoricalLocation
+from mmm.metadata_collector import get_station_coordinates, get_station_history, get_sensor_deployments
 from mmm.processes import average_process, inference_process
-from stadb import SensorThingsApiDB
+from mmm.schemas import mmapi_data_types
 
 
 def get_properties(doc: dict, properties: list) -> dict:
@@ -33,6 +34,7 @@ def get_properties(doc: dict, properties: list) -> dict:
     for p in properties:
         data[p] = doc[p]
     return data
+
 
 def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
     """
@@ -174,7 +176,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
     assert (type(mc) is MetadataCollector)
     assert (type(collections) is list)
     # Stations as thing
-    if "all" in collections:
+    if "all" in collections or collections == []:
         collections = mc.collection_names
     rich.print(f"Propagating collections {collections}")
 
@@ -182,20 +184,19 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
     things_ids = {}
     location_ids = {}
     obs_props_ids = {}
+    fois = {}
 
     # Convert "programmes" into "FeaturesOfInterest"
     programmes = mc.get_documents("programmes")
     for programme in programmes:
         programme_id = programme["#id"]
-        rich.print(f"[gold1]Creating FeatureOfInterest {programme_id}")
         foi = FeatureOfInterest(
             programme_id,
             programme["description"],
             programme["geoJsonFeature"]
         )
-        import json
-        rich.print(json.dumps(foi.data, indent=2))
         foi.register(url, update=update, verbose=True)
+        fois[programme["#id"]] = foi.id
 
     sensors = mc.get_documents("sensors")
     if "sensors" in collections:
@@ -251,16 +252,16 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 histloc.register(url, verbose=True, update=update)
 
     for sensor in sensors:
-        rich.print(f"Creating Datastreams for sensor {sensor['#id']}")
+        rich.print(f"[green]Creating Datastreams for sensor {sensor['#id']}")
         sensor_name = sensor["#id"]
-        sensor_deployments = get_sensor_station_deployment(mc, sensor)
+        sensor_deployments = get_sensor_deployments(mc, sensor["#id"])
         stations_processed = []
         for station, deployment_time in sensor_deployments:
             if station in stations_processed:
-                continue # already processed for this sensor
+                rich.print(f"[yellow]Skipping station {station}")
+                continue  # already processed for this sensor
             else:
-                stations_processed.append(station
-                                          )
+                stations_processed.append(station)
             rich.print(f"[orange1]Generating Datastreams for sensor={sensor_name} in station={station}")
             # Create full_data datastreams!
             for var in sensor["variables"]:
@@ -269,13 +270,16 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 sensor_id = sensor_ids[sensor_name]
                 thing_id = things_ids[station]
                 obs_prop_id = obs_props_ids[varname]
+                station_doc = mc.get_document("stations", station)
+
                 if var["dataType"] == "timeseries":  # creating timeseries data
                     ds_name = f"{station}:{sensor_name}:{varname}:full_data"
                     units_doc = mc.get_document("units", units)
                     ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
                     properties = {
                         "dataType": "timeseries",
-                        "fullData": True
+                        "fullData": True,
+                        "defaultFeatureOfInterest": fois[station_doc["defaults"]["@programmes"]]
                     }
                     if "@qualityControl" in var.keys():
                         qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
@@ -295,7 +299,8 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                     ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
                     properties = {
                         "dataType": "profiles",
-                        "fullData": True
+                        "fullData": True,
+                        "defaultFeatureOfInterest": fois[station_doc["defaults"]["@programmes"]]
                     }
                     if "@qualityControl" in var.keys():
                         qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
@@ -307,6 +312,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                         }
 
                     ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)
+                    rich.print(f"[cyan]Registering Datastream {ds_name}")
                     ds.register(url, update=update, verbose=True)
 
                 elif var["dataType"] == "files":
@@ -323,12 +329,19 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                     ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties,
                                     observation_type="OM_Observation")
                     ds.register(url, update=update, verbose=True)
+                elif var["dataType"] == "detections":
+                    # The process doing the detection should register this variable
+                    pass
+                elif var["dataType"] == "inference":
+                    # The process doing the inference should register this variable
+                    pass
+                else:
+                    raise ValueError(f"dataType={var['dataType']} not implemented!")
 
             # Creating average data
             for sensor_process in sensor["processes"]:
                 process = mc.get_document("processes", sensor_process["@processes"])
                 params = sensor_process["parameters"]
-                station = sensor["deployment"]["@stations"]
                 sensor_id = sensor_ids[sensor_name]
                 thing_id = things_ids[station]
 
@@ -336,19 +349,24 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                     average_process(sensor, process, params, mc, obs_props_ids, sensor_id, thing_id, url, update=update)
 
                 elif process["type"] == "inference":
-                    inference_process(sensor, process, mc, obs_props_ids, sensor_id, thing_id, url, update=True)
+                    inference_process(sensor, process, mc, obs_props_ids, sensor_id, thing_id,
+                                      fois[station_doc["defaults"]["@programmes"]], url, update=True)
                 else:
                     rich.print(f"[red]ERROR: process type not implemented '{process['type']}'")
                     exit(-1)
 
 
-def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: str, sensor_name: str, data_type,
-                   foi_id: int, average="") -> bool:
+def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, data_type,
+                   foi_id: int = 0, average="", tmp_folder="/tmp/sta_db_copy/data") -> bool:
     """
     This function performs a bulk load of the data contained in the input file
+
+    foi_id: default FeatureOfInterest
     """
-    rich.print(f"[orange3]Processing data from sensor {sensor_name} type={data_type} file={filename}")
-    rich.print("Loading file...", end="")
+
+    # TODO: get the Datastreams in a proper way
+    assert data_type in mmapi_data_types, f"data_type={data_type} not valid!"
+
     if filename.endswith(".csv"):
         opened = False
         time_formats = [
@@ -382,15 +400,12 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         df = drop_duplicated_indexes(df, keep="first")
 
     elif data_type == "detections":
-        rich.print("[yellow]WARNING! Dropping duplicated indexes caused by wrong picture format")
-        print(df)
         df = df.reset_index()
         df = df.set_index(["timestamp", "datastream_id"])
         dup_idx = df[df.index.duplicated(keep="first")]
         df = df.drop(dup_idx.index)
         df = df.reset_index()
         df = df.set_index("timestamp")
-        print(df)
 
     db = SensorThingsApiDB(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
                                  psql_conf["password"], logging.getLogger(), timescaledb=True)
@@ -416,7 +431,7 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         datastreams = {key: value for key, value in datastreams.items() if key.endswith("full_data")}
         datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
         rich.print("[green]start data bulk load")
-        db.inject_to_timeseries(df, datastreams)
+        db.inject_to_timeseries(df, datastreams, tmp_folder=tmp_folder)
 
     elif data_type == "profiles" and average:
         rich.print(f"[purple]====> profile with average {sensor_name} <=======")
@@ -436,12 +451,12 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         datastreams = {key: value for key, value in datastreams.items() if key.endswith("full_data")}
         datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
         rich.print("[green]start data bulk load")
-        db.inject_to_profiles(df, datastreams)
+        db.inject_to_profiles(df, datastreams, tmp_folder=tmp_folder)
 
     elif data_type == "detections":
         rich.print(f"[purple]====> Detections  {sensor_name} <=======")
         rich.print("[green]start data bulk load")
-        db.inject_to_detections(df)
+        db.inject_to_detections(df, tmp_folder=tmp_folder)
 
     elif data_type == "files":
         rich.print(f"[purple]====> Files  {sensor_name} <=======")
@@ -449,7 +464,7 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
 
         # datastreams = {key.split(":")[2]: value for key, value in datastreams.items()}
         rich.print("[green]start data bulk load")
-        db.inject_to_files(df)
+        db.inject_to_files(df, tmp_folder=tmp_folder)
 
     elif data_type == "inference":
         rich.print(f"[purple]====> Inference  {sensor_name} <=======")
@@ -473,92 +488,8 @@ def bulk_load_data(filename: str, psql_conf: dict, mc: MetadataCollector, url: s
         db.inject_to_observations(df, datastreams, url, foi_id, average)
 
     else:
-        rich.print("[red]Unimplemented!!")
-        exit()
+        raise ValueError("This should never happen!")
 
-
-def get_station_history(mc: MetadataCollector, name: str) -> list:
-    """
-    Looks for all activities with the
-    """
-    station_filter = {"appliedTo.@stations": name}
-    activities = mc.get_documents("activities", mongo_filter=station_filter)
-    history = []
-    for a in activities:
-        h = load_fields_from_dict(a, ["time", "type", "description", "where/position"],
-                                  rename={"where/position": "position"})
-        history.append(h)
-
-    # Sort based on history
-    history = sorted(history, key=lambda x: x['time'])
-    return history
-
-
-def get_sensor_station_deployment(mc: MetadataCollector, sensor_doc: dict) -> list:
-    """
-    Looks for all stations where a sensor has been deployed
-    """
-    assert type(mc) is MetadataCollector
-    assert type(sensor_doc) is dict
-    sensor_name = sensor_doc["#id"]
-    deployments = []  # array of (stationId, deploymentTime)
-    # First, check if there's a deployment in the sensor metadata
-    if "deployment" in sensor_doc.keys():
-        DeprecationWarning(YEL + f"Sensor '{sensor_doc}': including the deployment in the Sensor description is deprecated!" + RST)
-        deployment_time = "1970-01-01T00:00:00Z"
-        station = sensor_doc["deployment"]["@stations"]
-        deployments.append((station, deployment_time))
-
-    # Get all activities with type=deployment and involving this sensor
-    hist = mc.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@sensors": sensor_name})
-    for dep in hist:
-        rich.print(dep)
-        deployment_time = dep["time"]
-        # The deployment station can be at the 'appliedTo' or at 'where' section
-        if "@stations" in dep["appliedTo"].keys():
-            station = dep["appliedTo"]["@stations"]
-        elif "@stations" in dep["where"].keys():
-            station = dep["where"]["@stations"]
-        else:
-            raise LookupError(f"Activity {hist['#id']} should include @stations in 'where' or in 'appliedTo'")
-        deployments.append((station, deployment_time))
-    return deployments
-
-
-def get_station_deployments(mc: MetadataCollector, station_id: str) -> list:
-    """
-    Looks for all stations where a sensor has been deployed
-    """
-    assert type(mc) is MetadataCollector
-    assert type(station_id) is str
-    # Get all activities with type=deployment and involving this sensor
-    deployments = mc.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@stations": station_id})
-    deployments = sorted(deployments, key=lambda x: x['time'])
-    return deployments
-
-
-def get_station_coordinates(mc: MetadataCollector, station: any) -> (float, float, float):
-    """
-    Looks for the latest coordinates of a station based on its deployment history. Station may be station_id (str) or
-    the station document (dict)
-    """
-    if type(station) is str:
-        station = mc.get_document("station", station)
-    elif type(station) is dict:
-        pass
-    else:
-        raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
-    rich.print(f"[cyan]Looking for deployment of station {station['#id']}")
-    deployments = get_station_deployments(mc, station['#id'])
-
-    for deployment in reversed(deployments):
-        # Get the latest deployment
-        latitude = deployment["where"]["position"]["latitude"]
-        longitude = deployment["where"]["position"]["longitude"]
-        depth = deployment["where"]["position"]["depth"]
-        break
-
-    return latitude, longitude, depth
 
 
 

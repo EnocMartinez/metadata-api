@@ -10,6 +10,16 @@ This API is heavily influenced by the SensorThings API, but has some major diffe
 - Every document is versioned and stored, so the whole lifecycle of a document can be retrieved.
 
 
+## Metadata API Data Types##
+| data type  | description                                           | data model                         | full data stored in     | averaged data stored in |
+|------------|-------------------------------------------------------|------------------------------------|-------------------------|-------------------------|
+| timeseries | fixed-point timeseries data                           | time, value(float)                 | `timeseries` hypertable | `OBSERVATIONS` table    |
+| profiles   | depth-dependant timeseries data                       | time, depth (float), value (float) | `profiles` hypertable   | `OBSERVATIONS` table    |
+| detections | fixed-point counts data (e.g. fish counts)            | time, value(int)                   | `detections` hypertable | n/a                     |
+| inference  | complex JSON structures, mainly produced by AI models | time, value(json), params(json)    | `OBSERVATIONS` table    | n/a                     |
+| files      | Any file-based data, value should be the file URL     | time, value(str), params(json)     | `OBSERVATIONS` table    | n/a                     |
+
+
 ## Metadata API to SensorThings mappings ##
 
 ### Conventions

@@ -20,7 +20,7 @@ class FileServer:
     def __init__(self, conf: dict):
         """
         Simple and stupid class that converts paths to urls and urls to paths
-
+z
         :param basepath: root path of the fileserver
         :param baseurl: root url of the fileserver
         :param host: hostname of the fileserver

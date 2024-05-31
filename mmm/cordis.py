@@ -209,3 +209,4 @@ if __name__ == "__main__":
     data = assign_orgs_to_project(mc, data)
     rich.print(data)
     mc.insert_document("projects", data, update=True)
+
