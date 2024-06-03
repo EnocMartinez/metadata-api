@@ -275,7 +275,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 data_type = var["dataType"]
 
                 if data_type == "timeseries":  # creating timeseries data
-                    ds_name = f"{station}:{sensor_name}:{varname}:{data_type}:full_data"
+                    ds_name = f"{station}:{sensor_name}:{varname}:{data_type}:full"
                     units_doc = mc.get_document("units", units)
                     ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
                     properties = {
@@ -296,7 +296,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                     ds.register(url, update=update, verbose=True)
 
                 elif data_type == "profiles":  # creating profile data
-                    ds_name = f"{station}:{sensor_name}:{varname}:{data_type}:full_data"
+                    ds_name = f"{station}:{sensor_name}:{varname}:{data_type}:full"
                     units_doc = mc.get_document("units", units)
                     ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
                     properties = {
@@ -307,9 +307,9 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                     if "@qualityControl" in var.keys():
                         qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
                         properties["qualityControl"] = {
-                            "description": "Quality Control configuration following the QARTOD guidelines" \
-                                           " (https://ioos.noaa.gov/project/qartod) and using the ioos_qc python package " \
-                                           "(https://pypi.org/project/ioos-qc/)",
+                            "description": "Quality Control configuration following the QARTOD guidelines "
+                                           "(https://ioos.noaa.gov/project/qartod) using the ioos_qc pyython package "
+                                           "l(https://pypi.org/project/ioos-qc/)",
                             "qartod": qc_doc["qartod"]
                         }
 
@@ -365,7 +365,11 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
 
     foi_id: default FeatureOfInterest
     """
-
+    rich.print("[purple]==== Bulk load Data ====")
+    rich.print(f"    filename={filename}")
+    rich.print(f"    sensor={sensor_name}")
+    rich.print(f"    dataType={data_type}")
+    rich.print(f"    average={average}")
     assert data_type in mmapi_data_types, f"data_type={data_type} not valid!"
 
     if filename.endswith(".csv"):
@@ -417,16 +421,14 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
             datastreams = {
                 row["variable_name"]: row["datastream_id"] for _, row in datastreams_conf.iterrows()
             }
-            rich.print(datastreams)
             df = drop_duplicated_indexes(df)
             db.inject_to_timeseries(df, datastreams, tmp_folder=tmp_folder)
 
         else:  # averaged timeseries
-            datastreams_conf = db.get_datastream_config(sensor=sensor_name, data_type=data_type, full_data=True)
+            datastreams_conf = db.get_datastream_config(sensor=sensor_name, data_type=data_type, average=average)
             datastreams = {
                 row["variable_name"]: row["datastream_id"] for _, row in datastreams_conf.iterrows()
             }
-            rich.print(datastreams)
             db.inject_to_observations(df, datastreams, url, foi_id, average)
 
     elif data_type == "profiles":

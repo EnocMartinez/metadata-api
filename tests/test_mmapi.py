@@ -262,7 +262,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }
         self.mc.insert_document("processes", avg)
 
-    def test_06_add_organization(self):
+    def test_06_add_organization_people(self):
         """Adding organization process"""
         d = {
             "#id": "upc",
@@ -275,6 +275,16 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "alternativeNames": []
         }
         self.mc.insert_document("organizations", d)
+        d = {
+            "#id": "enoc_martinez",
+            "name": "Enoc Martinez",
+            "givenName": "Enoc",
+            "familyName": "Martinez",
+            "orcid": "0000-0003-1233-7105",
+            "email": "enoc.martinez@upc.edu",
+            "@organizations": "upc"
+        }
+        self.mc.insert_document("people", d)
 
     def test_07_station(self):
         """Register station and its deployment"""
@@ -392,8 +402,78 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
               "role": "dataManager"
             }
           ]
-        }
+        }  # SBE37
         self.mc.insert_document("sensors", d)
+        d = {
+          "#id": "SBE16",
+          "description": "SBE16 CTD sensor at OBSEA",
+          "shortName": "SBE16",
+          "serialNumber": "16XXXX",
+          "longName": "CTD SBE16 at OBSEA",
+          "instrumentType": {
+            "id": "CTD",
+            "definition": "http://vocab.nerc.ac.uk/collection/L05/current/130",
+            "label": "CTD"
+          },
+          "manufacturer": {
+            "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0013/",
+            "label": "Sea-Bird Scientific"
+          },
+          "model": {
+            "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL1457/",
+            "label": "SBE 16 MicroCat SMP-CTP"
+          },
+          "variables": [
+            {
+              "@variables": "TEMP",
+              "@units": "degrees_celsius",
+              "@qualityControl": "OBSEA:CTD:TEMP",
+              "dataType": "timeseries"
+            },
+            {
+              "@variables": "CNDC",
+              "@units": "siemens_per_metre",
+              "@qualityControl": "OBSEA:CTD:CNDC",
+              "dataType": "timeseries"
+            },
+            {
+              "@variables": "TEMP",
+              "@units": "degrees_celsius",
+              "@qualityControl": "OBSEA:CTD:TEMP",
+              "dataType": "profiles"
+            },
+            {
+              "@variables": "CNDC",
+              "@units": "siemens_per_metre",
+              "@qualityControl": "OBSEA:CTD:CNDC",
+              "dataType": "profiles"
+            },
+          ],
+          "processes": [
+            {
+              "@processes": "average",
+              "parameters": {
+                "period": "30min",
+                "ignore": []
+              }
+            },
+            {
+              "@processes": "average",
+              "parameters": {
+                "period": "1day",
+                "ignore": []
+              }
+            }
+          ],
+          "contacts": [
+            {
+              "@people": "enoc_martinez",
+              "role": "dataManager"
+            }
+          ]
+        }  # SBE16
+        self.mc.insert_document("sensors", d)
+
         d = {
           "#id": "sbe37depl",
           "name": "SBE37 deployment",
@@ -409,6 +489,22 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
           },
           "description": "Desplegat el SBE37 a l'OBSEA"
         }  # SBE37 deployment
+        self.mc.insert_document("activities", d)
+        d = {
+          "#id": "sbe16depl",
+          "name": "SBE16 deployment",
+          "time": "2022-01-01T00:00:00Z",
+          "type": "deployment",
+          "appliedTo": {
+            "@sensors": [
+              "SBE16"
+            ]
+          },
+          "where": {
+            "@stations": "OBSEA"
+          },
+          "description": "Desplegat el SBE16 a l'OBSEA"
+        }  # SBE16 deployment
         self.mc.insert_document("activities", d)
 
     def test_09_programme(self):
@@ -739,6 +835,108 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }  # IPC608 camera deployment
         post_json(self.mmapi_url + "/activities", d)
 
+    def test_12_add_projects(self):
+        d = {
+            "#id": "Geo-INQUIRE",
+            "type": "european",
+            "acronym": "Geo-INQUIRE",
+            "title": "Geosphere INfrastructures for QUestions into Integrated REsearch",
+            "totalBudget": 13923475.77,
+            "dateStart": "2022-10-01",
+            "dateEnd": "2026-09-30",
+            "active": True,
+            "funding": {
+                "grantId": "101058518",
+                "@organizations": "ec",
+                "call": "HORIZON-INFRA-2021-SERV-01",
+                "coordinator": "GFZ",
+                "partnershipType": "thirdParty"
+            },
+            "ourBudget": 43750.0,
+            "logoUrl": ""
+            }
+        self.mc.insert_document("projects", d)
+
+    def test_13_add_datasets(self):
+        d = {
+            "#id": "obsea_ctd_full",
+            "title": "CTD data at OBSEA Underwater Observatory full data",
+            "summary": "CTD data measured at OBSEA underwater observatory full data",
+            "@sensors": [
+                "SBE37",
+                "SBE16"
+            ],
+            "@stations": "OBSEA",
+            "dataType": "timeseries",
+            "dataSource": "sensorthings",
+            "dataSourceOptions": {
+                "fullData": True
+            },
+            "export": {
+                "namePattern": "obsea_ctd_full_${date_start}_${date_end}.nc",
+                "period": "daily",
+                "path": "./volumes/files",
+                "host": "localhost"
+            },
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "DataCurator"
+                },
+                {
+                    "@people": "enoc_martinez",
+                    "role": "ProjectLeader"
+                },
+                {
+                    "@organizations": "upc",
+                    "role": "RightsHolder"
+                }
+            ],
+            "funding": {
+                "@projects": [
+                    "Geo-INQUIRE"
+                ]
+            }
+        }
+        self.mc.insert_document("datasets", d)
+
+        d = {
+            "#id": "IPC608",
+            "title": "Underwater photography at OBSEA",
+            "summary": "Underwater photography at OBSEA",
+            "@sensors": [
+                "IPC608"
+            ],
+            "@stations": "OBSEA",
+            "dataSource": "filesystem",
+            "dataSourceOptions": {
+                "host": "localhost"
+            },
+            "dataType": "files",
+            "export": {
+                "namePattern": "obsea_ctd_full_${date_start}_${date_end}.nc",
+                "period": "daily",
+                "path": "./volumes/files",
+                "host": "localhost"
+            },
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "DataCurator"
+                },
+                {
+                    "@people": "enoc_martinez",
+                    "role": "ProjectLeader"
+                },
+
+                {
+                    "@organizations": "upc",
+                    "role": "RightsHolder"
+                }
+            ]
+        }
+        self.mc.insert_document("datasets", d)
+
     def test_20_propagate_to_sensorthings(self):
         """Propagate metadata from MongoDB to SensorThingsAPI"""
         propagate_mongodb_to_sensorthings(self.mc, [], self.conf["sensorthings"]["url"], update=True)
@@ -769,12 +967,12 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
         sta = self.dc.sta
         sta.initialize_dicts()  # update dicts
-        temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", average="30min")
-        cndc_id = sta.get_datastream_id("SBE37", "OBSEA", "CNDC", average="30min")
+        temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries", average="30min")
+        cndc_id = sta.get_datastream_id("SBE37", "OBSEA", "CNDC", "timeseries", average="30min")
 
         # Assert that we get an error with wrong data types
         with self.assertRaises(AssertionError):
-            sta.get_datastream_id("SBE37", "OBSEA", "CNDC", data_type="banana")
+            sta.get_datastream_id("SBE37", "OBSEA", "CNDC", "banana")
 
         foi_id = sta.value_from_query('select "ID" from "FEATURES" limit 1;')
 
@@ -826,6 +1024,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # results = data["value"]
         # self.assertEqual(len(results), len(df))
 
+        self.dc.sta.check_data_integrity()
+
     def test_31_ingest_raw_timeseries_data(self):
         """Ingesting average timeseries data using the API"""
         # Generate sine wave values
@@ -848,23 +1048,26 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         bulk_load_data(filename, self.conf["sensorthings"], self.sta_url, "SBE37", "timeseries", foi_id=foi_id,
                        tmp_folder="./tmpdata")
         os.remove(filename)
-
         self.info("Now, let's get the data and check that it's the same")
-        temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP")
+        temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries")
+        rich.print(f"TEMP ID: {temp_id}")
         # Now, let's download all the data that we injected, see if it's available
         data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=1000000")
         results = data["value"]
         self.assertEqual(len(results), len(tvector))
+        self.dc.sta.check_data_integrity()
 
 
     def test_32_get_raw_timeseries_data_api(self):
         """get timeseries from the API"""
-        temp_id = self.dc.sta.get_datastream_id("SBE37", "OBSEA", "TEMP")
+        temp_id = self.dc.sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries")
         url = self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$orderBy=phenomenonTime asc&$top=1"
         data = get_json(url)
         first_value = data["value"][0]["result"]
         # Temperature first value is 0
         self.assertAlmostEqual(first_value, 0.0)
+        self.dc.sta.check_data_integrity()
+
 
     def test_40_ingest_avg_profile_data(self):
         """Ingesting average timeseries data using the API"""
@@ -895,7 +1098,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         foi_id = sta.value_from_query('select "ID" from "FEATURES" limit 1;')
         sta.initialize_dicts()  # update dicts
         for var in ["CSPD", "CDIR", "UCUR", "VCUR"]:
-            datastream_id = sta.get_datastream_id("AWAC", "OBSEA", var, data_type="profiles", average="30min")
+            datastream_id = sta.get_datastream_id("AWAC", "OBSEA", var, "profiles", average="30min")
             for indx, row in df.iterrows():
                 obs = {
                     "phenomenonTime": row["timestamp"],
@@ -910,6 +1113,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # We should not able to insert it more than once
         with self.assertRaises(ConnectionError):
             post_json(url, obs)
+        self.dc.sta.check_data_integrity()
+
 
     def test_41_ingest_raw_profile_data(self):
         """Ingesting raw profiles data using the API"""
@@ -967,17 +1172,66 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         data = get_json(self.sta_ts_url + f"/Observations?$top=100000&$filter=Datastream/id eq {cdir_id}")
         results = data["value"]
         self.assertEqual(len(results), len(df))
+        self.dc.sta.check_data_integrity()
 
     def test_42_add_profile_to_ctd(self):
         """Add profile data to a sensor that has both timeseries and profile data"""
-        pass
-        
+        frequency = 1
+        dates = pd.date_range(start='2023-01-01', end="2023-01-02", freq='30min')
+        depths = np.arange(0, 10)
+        tvector = np.arange(0, len(dates))/1000
+        data = {
+            "timestamp": [],
+            "depth": [],
+            "TEMP": [],
+            "CNDC": []
+        }
+        variables = ["TEMP", "CNDC"]
+        for date, t in zip(dates, tvector):
+            for depth in depths:
+                data["timestamp"].append(date)
+                data["depth"].append(depth)
+                for var in variables:
+                    data[var].append(np.sin(2 * np.pi * frequency * t))
+
+        # Create a pandas DataFrame
+        df = pd.DataFrame(data)
+        df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        # Add Quality Control
+        for var in variables:
+            df[var + "_QC"] = 1
+
+        foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
+
+        filename = "test42.csv"
+        df.to_csv(filename)
+
+        # Now use the correct data type
+        bulk_load_data(filename, self.conf["sensorthings"], self.sta_url, "SBE37", "profiles", foi_id=foi_id,
+                       tmp_folder="./tmpdata")
+        os.remove(filename)
+
+        # Now, let's download all the data that we injected, see if it's available
+        self.log.info(f"Get profile data from Datastreams/Observations")
+        temp_id = self.dc.sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "profiles")
+        data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations?$top=100000")
+        results = data["value"]
+        self.assertEqual(len(results), len(df))
+
+        # Now, let's get the same data, but to general Observations endpoint and filtering by datastream
+        self.log.info(f"Get profile data from Observations with filter")
+        data = get_json(self.sta_ts_url + f"/Observations?$top=100000&$filter=Datastream/id eq {temp_id}")
+        results = data["value"]
+        self.assertEqual(len(results), len(df))
+        self.dc.sta.check_data_integrity()
 
     def test_50_ingest_pics(self):
         """Create and ingest picture data"""
         width, height = 2000, 2000  # Define the dimensions of the image
 
         self.log.info("Creating fake pictures...")
+        files = []
         for i in range(1, 10):
             image = Image.new('RGB', (width, height), 'white')  # Create a white background image
             draw = ImageDraw.Draw(image)
@@ -985,23 +1239,21 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             bottom_right = (150 + i*10, 150 + i*10)  # Bottom-right corner of the rectangle
             rectangle_color = 'blue'  # Color of the rectangle
             draw.rectangle([top_left, bottom_right], fill=rectangle_color)
-            image.save(f'rectangle_blue_{i:02d}.jpg')  # Save the image to a file
+            f = f'rectangle_blue_{i:02d}.jpg'
+            image.save(f)  # Save the image to a file
+            files.append(f)
 
         self.log.info("Creating Observations with the pictures...")
-        files = [f for f in os.listdir() if f.startswith("rectangle_blue")]
         dates = pd.date_range(start='2023-01-01', end="2023-01-02", freq='30min')
-        new_files = []
+        fileserver = self.dc.fileserver
+        datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "underwater_photography", "files")
         for i in range(len(files)):
             file = files[i]
-            newfilename = "fileserver/data/" + file
-            # Copy to nginx fileserver
-            os.rename(file, newfilename)
-            new_files.append(newfilename)
-            datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "underwater_photography", data_type="files")
+            path = fileserver.send_file("pictures", file)
             foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
             d = {
                 "phenomenonTime": dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'),
-                "result": "http://localhost:8082/files/data/" + file,
+                "result": path,
                 "FeatureOfInterest": {"@iot.id": foi_id}
             }
             url = self.sta_url + f"/Datastreams({datastream_id})/Observations"
@@ -1021,7 +1273,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             os.remove("image.png")
 
         # Remove created files
-        for file in new_files:
+        for file in files:
             os.remove(file)
 
     def test_51_ingest_pics_inference_detections(self):
@@ -1036,8 +1288,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             bottom_right = (150 + i*10, 150 + i*10)  # Bottom-right corner of the rectangle
             rectangle_color = 'red'  # Color of the rectangle
             draw.rectangle([top_left, bottom_right], fill=rectangle_color)
-            filename = f"fileserver/data/rectangle_red_{i:03d}.jpg"
-            image.save(filename)
+            filename = f"rectangle_red_{i:03d}.jpg"
+            image.save(filename)  # Save the image to a file
             pictures.append(filename)
 
         # Let's create a csv file for file bulk load
@@ -1050,13 +1302,15 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         start = "2023-02-01T00:00:00Z"
         end = "2023-03-01T00:00:00Z"
         dates = pd.date_range(start=start, end=end, freq='30min')
-        datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "underwater_photography", data_type="files")
+        datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "underwater_photography", "files")
         foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
         for i in range(len(pictures)):
+            url = self.dc.fileserver.send_file("pictures", pictures[i])
             data["timestamp"].append(dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'))
-            data["results"].append("http://localhost:8082/files/data/" + os.path.basename(pictures[i]))
+            data["results"].append(url)
             data["datastream_id"].append(datastream_id)
             data["foi_id"].append(foi_id)
+            os.remove(pictures[i])
         df = pd.DataFrame(data)
         datafile = "test51-files.csv"
         df.to_csv(datafile)
@@ -1083,7 +1337,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "foi_id": []
         }
         dates = pd.date_range(start='2023-02-01', end="2023-03-01", freq='30min')
-        datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "FATX", data_type="inference")
+        datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "FATX", "inference")
         foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
         for i in range(len(pictures)):
             data["timestamp"].append(dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'))
@@ -1110,8 +1364,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "foi_id": []
         }
         dates = pd.date_range(start='2023-02-01', end="2023-03-01", freq='30min')
-        chromis_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "chromis_chromis", data_type="detections")
-        diplodus_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "diplodus_vulgaris", data_type="detections")
+        chromis_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "chromis_chromis", "detections")
+        diplodus_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "diplodus_vulgaris", "detections")
         foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
         for i in range(len(pictures)):
             # chromis
@@ -1161,18 +1415,24 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }
         post_json(self.sta_url + "/Observations", d)
 
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
+
         with self.assertRaises(ValueError):
             sta.timescale.check_data_in_observations(raise_exception=True)
 
         wrong_datastreams = sta.timescale.check_data_in_observations(raise_exception=False)
+        self.log.setLevel(lvl)
         self.assertEqual(len(wrong_datastreams), 1)
 
     def test_71_correct_data_in_hypertables(self):
         """check that only the correct data is stored in the hypertables"""
         sta = self.dc.sta
+        lvl = self.log.getEffectiveLevel()
+        self.log.setLevel(logging.CRITICAL)
+
         errors = sta.timescale.check_data_in_hypertables()
         self.assertEqual(len(errors), 0)
-        lvl = self.log.getEffectiveLevel()
 
         # Now let's force some errors and catch the exceptions
 
@@ -1206,15 +1466,25 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             sta.timescale.check_data_in_hypertables()
 
         wrong_ids = sta.timescale.check_data_in_hypertables(raise_exception=False)
+
+        self.log.setLevel(lvl)
+
         self.assertEqual(len(wrong_ids), 3)
         self.assertIn(timeseries_id, wrong_ids)
         self.assertIn(profile_id, wrong_ids)
         self.assertIn(detections_id, wrong_ids)
 
+        self.log.info("Deleting wrong observations...")
+        self.dc.sta.exec_query(f"delete from timeseries where datastream_id = {profile_id};", fetch=False)
+        self.dc.sta.exec_query(f"delete from detections where datastream_id = {timeseries_id};", fetch=False)
+        self.dc.sta.exec_query(f"delete from profiles where datastream_id = {detections_id};", fetch=False)
+
     def test_80_create_timeseries_dataset(self):
         """Creating a dataset"""
-
-        pass
+        os.makedirs("datasets", exist_ok=True)
+        self.dc.generate("obsea_ctd_full", "2020-01-01", "2030-01-01", "datasets", None, format="csv")
+        self.dc.generate("obsea_ctd_full", "2020-01-01", "2030-01-01", "datasets", None, format="nc")
+        self.dc.generate("pictures_zip", "2020-01-01", "2030-01-01", "datasets", None, format="nc")
 
 
     @classmethod

@@ -683,7 +683,14 @@ class MetadataCollector:
 
         # Loop backwards in deployments to get the first deployment before the timestamp
         for idx, row in df.iterrows():
-            if pd.Timestamp(timestamp) >= idx:
+            # If timezone is not present, force UTC
+            if idx.tz is None:
+                idx = idx.tz_localize("UTC")
+            tsamp = pd.Timestamp(timestamp)
+            if tsamp.tz is None:
+                tsamp = tsamp.tz_localize("UTC")
+            # Compare
+            if tsamp >= idx:
                 return row["latitude"], row["longitude"], row["depth"]
 
         raise LookupError(f"Deployment for station={station_name} not found!")

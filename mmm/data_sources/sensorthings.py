@@ -952,7 +952,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
             average = False
         return data_type, average
 
-    def get_datastream_id(self, sensor: str, station: str, variable: str, data_type="timeseries",  average: str = ""):
+    def get_datastream_id(self, sensor: str, station: str, variable: str, data_type: str,  average: str = ""):
         """
         Returns the ID  of a datastream that matches sensor name, station and data type.
         """
@@ -1050,7 +1050,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
             ;
         '''
         if sensor:
-            query.replace(";", f'where "SENSOR_ID" = {sensor_id};')
+            query = query.replace(";", f'where "SENSOR_ID" = {sensor_id};')
 
         df = self.dataframe_from_query(query)
 
@@ -1065,4 +1065,8 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
             df = df[df["full_data"] == full_data]
 
         return df
+
+    def check_data_integrity(self):
+        self.timescale.check_data_in_observations()
+        self.timescale.check_data_in_hypertables()
 

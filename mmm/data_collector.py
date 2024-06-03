@@ -40,7 +40,7 @@ class DataCollector:
                                          staconf["password"], log, timescaledb=True)
         else:
             self.sta = sta
-        self.fileserver = FileServer(secrets["fileserver"])
+        self.fileserver = FileServer(secrets["fileserver"], log)
 
     def generate(self, dataset_id: str, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder: str,
                  ckan: CkanClient, force=False, format="") -> str:
@@ -52,6 +52,11 @@ class DataCollector:
         """
         os.makedirs(out_folder, exist_ok=True)
         conf = self.mc.get_document("datasets", dataset_id)
+
+        if type(time_start) is str:
+            time_start = pd.Timestamp(time_start)
+        if type(time_end) is str:
+            time_end = pd.Timestamp(time_end)
 
         # check the dataset constraints
         if "constraints" in conf.keys() and "timeRange" in conf["constraints"].keys():
@@ -71,7 +76,7 @@ class DataCollector:
             elif format.lower() in ["nc", "netcdf"]:
                 dataset_file, dataset_url, file_type = self.netcdf_from_sta(conf, time_start, time_end, out_folder, force)
             else:
-                raise ValueError(f"Unknwon format '{format}'")
+                raise ValueError(f"Unknwon dataSource format '{format}'")
 
         elif conf["dataSource"] == "filesystem":
             dataset_file, dataset_url, file_type = self.zip_from_filesystem(conf, time_start, time_end, out_folder, force)
@@ -119,9 +124,9 @@ class DataCollector:
     def dataframe_from_sta(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
                            time_end: pd.Timestamp):
         if conf["dataType"] == "timeseries":
-            return self.dataframe_from_sta_timeseries(conf, station, sensor, time_start, pd.Timestamp)
+            return self.dataframe_from_sta_timeseries(conf, station, sensor, time_start, time_end)
         elif conf["dataType"] == "detections":
-            return self.dataframe_from_sta_detections(conf, station, sensor, time_start, pd.Timestamp)
+            return self.dataframe_from_sta_detections(conf, station, sensor, time_start, time_end)
         else:
             raise ValueError(f"Unimplemented data type {conf['dataType']}")
 
