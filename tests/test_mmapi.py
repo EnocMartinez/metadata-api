@@ -357,6 +357,18 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
               "@qualityControl": "OBSEA:CTD:CNDC",
               "dataType": "timeseries"
             },
+            {
+              "@variables": "TEMP",
+              "@units": "degrees_celsius",
+              "@qualityControl": "OBSEA:CTD:TEMP",
+              "dataType": "profiles"
+            },
+            {
+              "@variables": "CNDC",
+              "@units": "siemens_per_metre",
+              "@qualityControl": "OBSEA:CTD:CNDC",
+              "dataType": "profiles"
+            },
           ],
           "processes": [
             {
@@ -844,6 +856,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         results = data["value"]
         self.assertEqual(len(results), len(tvector))
 
+
     def test_32_get_raw_timeseries_data_api(self):
         """get timeseries from the API"""
         temp_id = self.dc.sta.get_datastream_id("SBE37", "OBSEA", "TEMP")
@@ -954,6 +967,11 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         data = get_json(self.sta_ts_url + f"/Observations?$top=100000&$filter=Datastream/id eq {cdir_id}")
         results = data["value"]
         self.assertEqual(len(results), len(df))
+
+    def test_42_add_profile_to_ctd(self):
+        """Add profile data to a sensor that has both timeseries and profile data"""
+        pass
+        
 
     def test_50_ingest_pics(self):
         """Create and ingest picture data"""
@@ -1193,10 +1211,16 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.assertIn(profile_id, wrong_ids)
         self.assertIn(detections_id, wrong_ids)
 
+    def test_80_create_timeseries_dataset(self):
+        """Creating a dataset"""
+
+        pass
+
+
     @classmethod
     def tearDownClass(cls):
         cls.log.info("stopping containers")
-        os.system("docker compose down")
+        #os.system("docker compose down")
 
 
 if __name__ == "__main__":

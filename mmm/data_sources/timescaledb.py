@@ -322,7 +322,7 @@ class TimescaleDB(LoggerSuperclass):
             if len(partial_wrong_ids) > 0:
                 for datastream_id in wrong_ids:
                     ds_name = self.db.datastream_id_name[datastream_id]
-                    error_messages.append(f"Wrong datastream '{ds_name}' (id={datastream_id})  in hypertable {ds_name}")
+                    error_messages.append(f"Wrong datastream '{ds_name}' (id={datastream_id})  in hypertable {d}")
                 wrong_ids += partial_wrong_ids
 
         for err in error_messages:

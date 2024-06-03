@@ -505,10 +505,8 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         if self.host != "localhost" and self.host != "127.0.0.1":
             rm_remote_files(self.host, files)
 
-        # Update OBSERVATIONs count
+        # Update OBSERVATION count
         self.update_observations_id_seq()
-
-
 
     def dataframes_to_observations_csv(self, dataframes: list, column_mapper: dict, folder: str, feature_id: int,
                                        avg_period: str = "", profile=False):
@@ -1017,4 +1015,54 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         table
         """
         self.value_from_query('select setval(\'"OBSERVATIONS_ID_seq"\', (select max("ID") from "OBSERVATIONS") );')
+
+    def get_datastream_config(self, sensor="", data_type="", average_period="", full_data=False):
+        """
+        returns a dataframe with the following columns:
+            datastream_id, datastream_name, variable_id, variable_name, data_type and average_period
+
+        :param sensor: If set, get only the datastreams for this sensor
+        :param data_type: get only datastreams with this data_type
+        :param full_data: return only full data datastreams (not averaged)
+        :param average: if set, get only the dataframes with averaged with this period or use "full" to get the full data
+
+        :returns: DataFrame with the following columns:
+            datastream_id, datastream_name, variable_id, variable_name, data_type, full_data, average_period
+        """
+        if sensor:
+            if type(sensor) is str:
+                sensor_id = self.sensor_id_name[sensor]
+            elif type(sensor) is int:
+                sensor_id = sensor
+
+        query = '''
+            select 
+                "DATASTREAMS"."ID" as datastream_id,
+                "DATASTREAMS"."NAME" as datastream_name,
+                prop."NAME" as variable_name,
+                prop."ID" as variable_id,
+                "DATASTREAMS"."PROPERTIES"->>'dataType' as data_type,
+                ("DATASTREAMS"."PROPERTIES"->>'fullData')::boolean as full_data, 
+                "DATASTREAMS"."PROPERTIES"->>'averagePeriod' as average_period
+            from "DATASTREAMS"
+            left join (select * from "OBS_PROPERTIES") as prop	
+            on prop."ID" = "DATASTREAMS"."OBS_PROPERTY_ID"
+            ;
+        '''
+        if sensor:
+            query.replace(";", f'where "SENSOR_ID" = {sensor_id};')
+
+        df = self.dataframe_from_query(query)
+
+        # Now filter the results based on type, average or fullData
+        if data_type:
+            df = df[df["data_type"] == data_type]
+
+        if average_period:
+            df = df[df["average_period"] == average_period]
+
+        if full_data:
+            df = df[df["full_data"] == full_data]
+
+        return df
 

@@ -34,8 +34,8 @@ def average_process(sensor: dict, process: dict, parameters: dict, mc: MetadataC
             data_type = var["dataType"]
             obs_prop_id = obs_props_ids[varname]
             if var["dataType"] == "timeseries" or var["dataType"] == "profiles":  # creating raw_data timeseries
-                ds_name = f"{station}:{sensor_name}:{varname}:{period}_average"
-                ds_full_data_name = f"{station}:{sensor_name}:{varname}:full_data"
+                ds_name = f"{station}:{sensor_name}:{varname}:{data_type}:{period}"
+                ds_full_data_name = f"{station}:{sensor_name}:{varname}:{data_type}:full"
                 units_doc = mc.get_document("units", units)
                 ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
                 properties = {
