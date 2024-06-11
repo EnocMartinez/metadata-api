@@ -37,7 +37,7 @@ except ModuleNotFoundError:
     # add parent
     from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_mongodb_to_sensorthings,
                      bulk_load_data)
-    from mmm.common import GRN, RST, LoggerSuperclass
+    from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess
     from metadata_api import run_metadata_api
     from sta_timeseries import run_sta_timeseries_api
 
@@ -68,7 +68,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         log.setLevel(logging.DEBUG)
         LoggerSuperclass.__init__(cls, log, "test")
         log.info("Setting up system start docker compose... (this may take a while)")
-        os.system("docker compose up -d")
+        run_subprocess("docker compose up -d", fail_exit=True)
 
         log.info("Setup Metadata Collector...")
         cls.mc = init_metadata_collector(conf)
@@ -94,8 +94,25 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         cls.mc.drop_all()
         cls.dc.sta.drop_all()
 
-        # Create fileserver folder
-        os.makedirs("fileserver/data", exist_ok=True, mode=0o777)
+        # Create volumes for all docker services
+        with open("docker-compose.yaml") as f:
+            docker_config = yaml.safe_load(f)
+
+        cls.docker_volumes = []
+
+        for service in docker_config["services"].values():
+            for key, value in service.items():
+                if key == "volumes":
+                    for volume in value:
+                        try:
+                            src, dst = volume.split(":")
+                        except ValueError:
+                            src, dst, prm = volume.split(":")
+                        if "." not in os.path.basename(src):  # if dot in name assume its a folder
+                            os.makedirs(src, exist_ok=True, mode=0o777)
+                            rich.print(f"[orange3]Creating folder {src}")
+                        cls.docker_volumes.append(src)
+        cls.local_csv_data = "/var/tmp/mmapi/tmpdata/"
 
     def test_01_launch_metadata_api(self):
         """Run all tests for MMAPI in a sequential manner"""
@@ -875,7 +892,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "export": {
                 "namePattern": "obsea_ctd_full_${date_start}_${date_end}.nc",
                 "period": "daily",
-                "path": "./volumes/files",
+                "path": "/var/tmp/mmapi/volumes/files/",
                 "host": "localhost"
             },
             "contacts": [
@@ -901,7 +918,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.mc.insert_document("datasets", d)
 
         d = {
-            "#id": "IPC608",
+            "#id": "IPC608_pics",
             "title": "Underwater photography at OBSEA",
             "summary": "Underwater photography at OBSEA",
             "@sensors": [
@@ -916,7 +933,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "export": {
                 "namePattern": "obsea_ctd_full_${date_start}_${date_end}.nc",
                 "period": "daily",
-                "path": "./volumes/files",
+                "path": "/var/tmp/mmapi/volumes/files/",
                 "host": "localhost"
             },
             "contacts": [
@@ -934,7 +951,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "role": "RightsHolder"
                 }
             ]
-        }
+        }  # underwater pictures dataset
         self.mc.insert_document("datasets", d)
 
     def test_20_propagate_to_sensorthings(self):
@@ -1057,7 +1074,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.assertEqual(len(results), len(tvector))
         self.dc.sta.check_data_integrity()
 
-
     def test_32_get_raw_timeseries_data_api(self):
         """get timeseries from the API"""
         temp_id = self.dc.sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries")
@@ -1067,7 +1083,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # Temperature first value is 0
         self.assertAlmostEqual(first_value, 0.0)
         self.dc.sta.check_data_integrity()
-
 
     def test_40_ingest_avg_profile_data(self):
         """Ingesting average timeseries data using the API"""
@@ -1114,7 +1129,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         with self.assertRaises(ConnectionError):
             post_json(url, obs)
         self.dc.sta.check_data_integrity()
-
 
     def test_41_ingest_raw_profile_data(self):
         """Ingesting raw profiles data using the API"""
@@ -1269,6 +1283,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         # Now download all files
         for result in results:
+            print(result["result"])
             urllib.request.urlretrieve(result["result"], "image.png")
             os.remove("image.png")
 
@@ -1483,14 +1498,15 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         """Creating a dataset"""
         os.makedirs("datasets", exist_ok=True)
         self.dc.generate("obsea_ctd_full", "2020-01-01", "2030-01-01", "datasets", None, format="csv")
-        self.dc.generate("obsea_ctd_full", "2020-01-01", "2030-01-01", "datasets", None, format="nc")
-        self.dc.generate("pictures_zip", "2020-01-01", "2030-01-01", "datasets", None, format="nc")
+        rich.print("[green]CSV dataset ok!")
 
+        self.dc.generate("obsea_ctd_full", "2020-01-01", "2030-01-01", "datasets", None, format="nc")
+
+        self.dc.generate("IPC608_pics", "2020-01-01", "2030-01-01", "datasets", None, format="zip")
 
     @classmethod
     def tearDownClass(cls):
         cls.log.info("stopping containers")
-        #os.system("docker compose down")
 
 
 if __name__ == "__main__":

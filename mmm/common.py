@@ -193,6 +193,16 @@ def reverse_dictionary(data):
     return {value: key for key, value in data.items()}
 
 
+def run_over_ssh(host, cmd, fail_exit=False):
+    if host == "localhost" or host == os.uname().nodename:
+        return run_subprocess(cmd, fail_exit=fail_exit)
+    else:
+        if type(cmd) is list:  # convert list to str
+            cmd = " ".join(cmd)
+        cmd = ["ssh", host, cmd]
+        return run_subprocess(cmd, fail_exit=fail_exit)
+
+
 def run_subprocess(cmd, fail_exit=False):
     """
     Runs a command as a subprocess. If the process retunrs 0 returns True. Otherwise prints stderr and stdout and returns False
@@ -200,7 +210,7 @@ def run_subprocess(cmd, fail_exit=False):
     :return: True/False
     """
     assert (type(cmd) is list or type(cmd) is str)
-    if type(cmd) == list:
+    if type(cmd) is list:
         cmd_list = cmd
     else:
         cmd_list = cmd.split(" ")
@@ -215,7 +225,7 @@ def run_subprocess(cmd, fail_exit=False):
             rich.print(f">[bright_black] {proc.stderr.decode()}")
 
         if fail_exit:
-            exit(1)
+            raise ValueError(f"command failed: '{cmd_list}'")
 
         return False
     return True

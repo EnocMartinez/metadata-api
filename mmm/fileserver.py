@@ -41,8 +41,11 @@ class FileServer(LoggerSuperclass):
         if self.baseurl[-1] != "/":
             self.baseurl += "/"
 
-        if self.basepath[:2] is "./":
-            self.basepath[2:]
+        if self.basepath.startswith("./"):
+            self.basepath = self.basepath[2:]
+
+        if self.basepath[-1] != "/":
+            self.basepath += "/"
 
         self.host = conf["host"]
 
@@ -52,13 +55,11 @@ class FileServer(LoggerSuperclass):
         else:
             self.path_links = []
 
-        self.info("==== FileServer Initialized ====")
-        self.info(f"  >> base path: {self.basepath}")
-        self.info(f"  >>  base url: {self.baseurl}")
-        self.info(f"  >>      host: {self.host}")
-
     def path2url(self, path: str):
         assert type(path) is str, "expected string"
+
+        if path.startswith("./"):
+            path = path[2:]
 
         for link in self.path_links:
             # If there is a softlink to the path, replace with the real path
@@ -66,18 +67,26 @@ class FileServer(LoggerSuperclass):
                 path = path.replace(link, self.basepath)
         if self.basepath not in path:
             raise ValueError(f"basepath {self.basepath} not found in path:'{path}'")
-        return path.replace(self.basepath, self.baseurl)
+
+        url = path.replace(self.basepath, self.baseurl)
+
+        # make sure we don't have double / like http://my.url/some//path ->   http://my.url/some/path
+        protocol, route = url.split("://")
+        url = protocol + "://" + route.replace("//", "/")
+        return url
 
     def url2path(self, url: str):
         assert type(url) is str, "expected string"
         assert url.startswith("http://") or url.startswith("https://"), f"URL not valid '{url}'"
+        assert url.startswith(self.baseurl), f"URL {url} does not start with baseurl: {self.baseurl}"
         return url.replace(self.baseurl, self.basepath)
 
-    def send_file(self, path: str, file: str):
+    def send_file(self, path: str, file: str, dry_run=False, indexed=True):
         """
         Sends a file to the FileServer
         :param path: path to deliver the file
         :param file: filename
+        :param http_indexed: If True, the file should be http indexed, which means that should be a the base path
         :returns: URL of the files
         """
         assert type(path) is str, "path must be a string!"
@@ -87,21 +96,35 @@ class FileServer(LoggerSuperclass):
         if not os.path.exists(file):
             raise ValueError(f"file {file} does not exist!")
 
+        if file.startswith("./"):
+            file = file[2:]
+        if path.startswith("./"):
+            path = path[2:]
+
         # If we are in the 'host' machine, simply copy it
         if is_absolute_path(path):
             dest_file = os.path.join(path, os.path.basename(file))
-        else:
-            dest_file = os.path.join(self.basepath, path, os.path.basename(file))
 
-        if os.uname().nodename == self.host or self.host == "localhost":
-            self.info(f"Local copy from {file} to {dest_file}")
-            os.makedirs(os.path.dirname(dest_file), exist_ok=True)
-            shutil.copy2(file, dest_file)
         else:
-            # Creating folder (just in case)
-            run_subprocess(["ssh", self.host, f"mkdir -p {path}"])
-            # Run rsync process
-            run_subprocess(["rsync", file, f"{self.host}:{dest_file}"])
-            self.info(f"rsync from {file} to {self.host}:{dest_file}")
+            if path.startswith(self.basepath):
+                dest_file = os.path.join(path, os.path.basename(file))
+            else:
+                dest_file = os.path.join(self.basepath, path, os.path.basename(file))
 
-        return self.path2url(dest_file)
+        if not dry_run:
+            if os.uname().nodename == self.host or self.host == "localhost":
+                self.info(f"Local copy from {file} to {dest_file}")
+                os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                shutil.copy2(file, dest_file)
+            else:
+                # Creating folder (just in case)
+                run_subprocess(["ssh", self.host, f"mkdir -p {path}"])
+                # Run rsync process
+                run_subprocess(["rsync", file, f"{self.host}:{dest_file}"])
+                self.info(f"rsync from {file} to {self.host}:{dest_file}")
+        else:
+            # Dry run, do nothing
+            pass
+        if indexed:
+            return self.path2url(dest_file)
+        return dest_file

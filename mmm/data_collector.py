@@ -13,13 +13,14 @@ import logging
 import pandas as pd
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
-from .common import run_subprocess, check_url, detect_common_path
+from .common import run_subprocess, check_url, detect_common_path, run_over_ssh
 from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
 import rich
 import os
 import json
+import emso_metadata_harmonizer as mh
 
 
 def init_data_collector(secrets: dict, log: logging.Logger, mc: MetadataCollector = None, sta: SensorThingsApiDB = None):
@@ -329,9 +330,9 @@ class DataCollector:
         filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".nc"
         local_file = os.path.join(out_folder, filename)
         remote_path = os.path.join(conf["export"]["path"], dataset_id)
-        remote_file = os.path.join(remote_path, filename)
-        dataset_url = self.fileserver.path2url(remote_file)
 
+        # Run send_file with dry_run to get the path and not sending the file
+        dataset_url = self.fileserver.send_file(remote_path, local_file, dry_run=True)
         if not force and check_url(dataset_url):
             rich.print(f"[yellow]Dataset already exists! URL: {dataset_url}")
             return filename, dataset_url, "NetCDF"
@@ -348,17 +349,17 @@ class DataCollector:
         for sensor_name in conf["@sensors"]:
             sensor = self.mc.get_document("sensors", sensor_name)
             df = self.dataframe_from_sta(conf, station, sensor, time_start, time_end)
-
             rich.print(f"[cyan]{sensor_name} data from {time_start} to {time_end}")
             dataframes.append(df)
             m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
             metadata.append(m)
 
-        call_generator(dataframes, metadata, output=local_file)
+        rich.print(f"[orange3]Creating file {local_file}")
+
+        call_dataset_generator(dataframes, metadata, output=local_file)
 
         rich.print("Delivering NetCDF dataset file ...")
-        self.fileserver.send_file(remote_path, local_file)
-
+        dataset_url = self.fileserver.send_file(remote_path, local_file)
         # We should return (file, url), but we don't have url yet
         return filename, dataset_url, "NetCDF"
 
@@ -415,6 +416,7 @@ class DataCollector:
         dest_path = os.path.join(conf["export"]["path"], dataset_id)
         filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".zip"
         filename = os.path.join(dest_path, filename)
+        filename_local = os.path.join("/tmp", filename)
 
         # First step, get all files indexed in the SensorThings database
         datastream_ids = []
@@ -462,6 +464,12 @@ class DataCollector:
 
         # Erase basepath, so we keep the basepath
         files = [f.replace(basepath, "") for f in files]
+
+        # Make sure that relative paths are not interpreted as absolute now
+        for i in range(len(files)):
+            if files[i].startswith("/"):
+                files[i] = files[i][1:]
+
         file_type = files[0].split(".")[-1]
 
         dataset_url = self.fileserver.path2url(filename)
@@ -470,29 +478,35 @@ class DataCollector:
             return filename, dataset_url, file_type
 
         rich.print(f"creating folders...", end="")
-        run_subprocess(["ssh", conf["export"]["host"], f"mkdir -p {dest_path}"])
+        run_over_ssh(conf["export"]["host"], f"mkdir -p {dest_path}", fail_exit=True)
         rich.print("[green]done!")
 
         # If the command is too long it cannot be sent via ssh and will raise an OSError, we create a temporal script
         # with the command and send it to the host
         script_name = os.path.basename(filename).split(".")[0] + ".sh"
         rich.print(f"[blue]Creating zip script {script_name}...")
-        cmd = f"cd {basepath} && zip -r {filename} {' '.join(files)}"
+
+        cmd = "#!/bin/bash\n"
+        cmd += "echo 'Auto-generated script from MMAPI, compressing files into a zip file'\n"
+        cmd += f"cd {basepath}\n"
+        cmd += f"mkdir -p {os.path.dirname(filename)}\n"
+        cmd += f"zip -r {filename} {' '.join(files)}\n"
+
         with open(script_name, "w") as f:
             f.write(cmd)  # write the command to the script
         os.chmod(script_name, 0o775)
         rich.print(f"[blue]Delivering zip script...")
         script_dest = os.path.join(f"/var/tmp/{script_name}")
-        self.fileserver.send_file("/var/tmp", script_name)
+        self.fileserver.send_file("/var/tmp", script_name, indexed=False)
 
         rich.print(f"creating zip file with {len(files)} files, this may take a while...", end="")
-        run_subprocess(["ssh", conf["export"]["host"], script_dest])
+        run_over_ssh(conf["export"]["host"], script_dest)
         rich.print("[green]done!")
 
         rich.print("Removing local script...")
         os.remove(script_name)
         rich.print("Removing remote script...")
-        run_subprocess(["ssh", conf["export"]["host"], f"rm {script_dest}"])
+        run_over_ssh(conf["export"]["host"], f"rm -f {script_dest}")
 
         return filename, dataset_url, file_type
 
@@ -624,7 +638,7 @@ class DataCollector:
         return d
 
 
-def call_generator(dataframes, metadata, output="output.nc", generator_path="../metadata-harmonizer/generator.py"):
+def call_dataset_generator(dataframes: list, metadata: list, output="output.nc"):
     """
     Dump dataframes and metadata to temporal files and call generator.py from the metadata-harmonizer project
     :param dataframes:
@@ -650,13 +664,6 @@ def call_generator(dataframes, metadata, output="output.nc", generator_path="../
     data = " ".join(csv_files)
     meta = " ".join(meta_files)
 
-    command = f"python3 {generator_path} --data {data} --metadata {meta} -o {output}"
-    rich.print(f"[purple]Running command: {command}")
-    ret = os.system(command)
-    if ret != 0:
-        raise ValueError("Could not generate dataset")
 
-    rich.print("Removing temporal files...", end="")
-    [os.remove(f) for f in csv_files]
-    [os.remove(f) for f in meta_files]
-    rich.print("[green]ok!")
+    mh.generate_dataset(csv_files, meta_files, output=output)
+
