@@ -11,6 +11,8 @@ created: 21/9/23
 import os
 import logging
 from logging.handlers import TimedRotatingFileHandler
+
+import jsonschema
 import rich
 import requests
 import subprocess
@@ -98,6 +100,7 @@ def setup_log(name, path="log", log_level="debug"):
 
 def file_list(dir_name) -> list:
     """ create a list of file and sub directories names in the given directory"""
+    assert os.path.isdir(dir_name), f"{dir_name} is not a directory!"
     list_of_files = os.listdir(dir_name)
     all_files = list()
     for entry in list_of_files:
@@ -107,6 +110,22 @@ def file_list(dir_name) -> list:
         else:
             all_files.append(full_path)
     return all_files
+
+
+def dir_list(dir_name) -> list:
+    """ create a list of file and sub directories names in the given directory"""
+    assert os.path.isdir(dir_name), f"{dir_name} is not a directory!"
+    list_of_dirs = os.listdir(dir_name)
+    all_dirs = list()
+    for entry in list_of_dirs:
+        full_path = os.path.join(dir_name, entry)
+        if os.path.isfile(entry):
+            continue
+        if os.path.isdir(full_path):
+            all_dirs = all_dirs + file_list(full_path)
+            all_dirs.append(full_path)
+    all_dirs = reversed(all_dirs)
+    return all_dirs
 
 
 class LoggerSuperclass:
@@ -397,3 +416,19 @@ def environment_from_file(filename):
             environ[key] = value
     return environ
 
+
+def validate_schema(doc: dict, schema: dict, errors: list, verbose=False) -> list:
+    if "$id" not in schema.keys():
+        raise ValueError("Schema not valid!! missing $id field")
+
+    if verbose:
+        rich.print(f"   Validating doc='{doc['#id']}' against schema {schema['$id']}")
+
+    try:  # validate against metadata schema
+        jsonschema.validate(doc, schema=schema)
+    except jsonschema.ValidationError as e:
+        txt = f"[red]Document='{doc['#id']}' not valid for schema '{schema['$id']}'[/red]. Cause: {e.message}"
+        errors.append(txt)
+        if verbose:
+            rich.print(txt)
+    return errors

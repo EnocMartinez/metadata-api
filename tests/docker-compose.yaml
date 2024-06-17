@@ -95,7 +95,65 @@ services:
     ports:
       - 8090:8080
     volumes:
-      - ./conf:/usr/local/tomcat/content/erddap
+      - ./conf/datasets.xml:/usr/local/tomcat/content/erddap/datasets.xml
+      - ./conf/setup.xml:/usr/local/tomcat/content/erddap/setup.xml
       - ./erddapData:/erddapData   # bind mount for ERDDAP internal data
       - ./datasets:/datasets # bind mount for user data files
+
+
+  ckan:
+    container_name: ckan
+    build:
+      context: ckan/
+      dockerfile: Dockerfile
+      args:
+        - TZ=UTC
+    ports:
+      - "5001:5000"
+    env_file:
+      - ./ckan.env
+    depends_on:
+      ckan_db:
+        condition: service_healthy
+      solr:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:5000"]
+
+  datapusher:
+    container_name: ckan_datapusher
+    image: ckan/ckan-base-datapusher:0.0.20
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:8800"]
+
+  ckan_db:
+    container_name: ckan_db
+    build:
+      context: postgresql/
+    env_file:
+      - ./ckan.env
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "postgres"]
+
+  solr:
+    container_name: ckan_solr
+    image: ckan/ckan-solr:2.10-solr9
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:8983/solr/"]
+
+  redis:
+    container_name: ckan_redis
+    image: redis:6
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-e", "QUIT"]
 

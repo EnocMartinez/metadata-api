@@ -54,6 +54,9 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
     assert (type(ckan) is CkanClient)
     assert (type(collections) is list)
 
+    if len(collections) == 0:
+        collections = mc.collection_names
+
     rich.print("Propagating data from MongoDB to CKAN")
     rich.print(f"Using the following collections: {collections}")
 

@@ -602,10 +602,8 @@ def merge_dataframes(df_list, sort=False):
     :param sort: If True, the resulting dataframe will be sorted based on its index
     :return:
     """
-    df = df_list[0]
-    for new_df in df_list[1:]:
-        df = df.append(new_df)
 
+    df = pd.concat(df_list)
     if sort:
         df = df.sort_index(ascending=True)
     return df

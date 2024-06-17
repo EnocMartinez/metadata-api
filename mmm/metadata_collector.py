@@ -13,11 +13,9 @@ from pymongo import MongoClient
 import datetime
 import rich
 import json
-import jsonschema
 import pandas as pd
 import os
-
-from mmm.common import YEL, RST, load_fields_from_dict
+from mmm.common import YEL, RST, load_fields_from_dict, validate_schema
 
 try:
     from mmm.schemas import mmm_schemas, mmm_metadata
@@ -56,21 +54,6 @@ def validate_key(data, key, key_type, errortype=SyntaxError):
         raise errortype(f"Expected type of {key}  is {key_type}, got {type(data[key])}")
 
 
-def validate_schema(doc: dict, schema: dict, errors: list, verbose=False) -> list:
-    if "$id" not in schema.keys():
-        raise ValueError("Schema not valid!! missing $id field")
-
-    if verbose:
-        rich.print(f"   Validating doc='{doc['#id']}' against schema {schema['$id']}")
-
-    try:  # validate against metadata schema
-        jsonschema.validate(doc, schema=schema)
-    except jsonschema.ValidationError as e:
-        txt = f"[red]Document='{doc['#id']}' not valid for schema '{schema['$id']}'[/red]. Cause: {e.message}"
-        errors.append(txt)
-        if verbose:
-            rich.print(txt)
-    return errors
 
 
 def init_metadata_collector(secrets: dict):
@@ -605,10 +588,10 @@ class MetadataCollector:
                 warnings.append(w)
 
             if "dataType" in doc.keys():
-                w = f"{collection}:{doc['#id']} 'dataType' in Sensors root will be ignored!"
-                rich.print(f"[yellow]{w}")
-                warnings.append(w)
-
+                if "dataSource" in doc.keys():
+                    w = f"{collection}:{doc['#id']} 'dataSource' in datasets root will be ignored!"
+                    rich.print(f"[yellow]{w}")
+                    warnings.append(w)
         return warnings
 
     def healthcheck(self, collections=None):
@@ -705,35 +688,42 @@ class MetadataCollector:
                 self.delete_document(col, doc["#id"])
 
 
-def get_station_deployments(mc: MetadataCollector, sensor_doc: dict) -> list:
+def get_station_deployments(mc: MetadataCollector, station: dict) -> list:
     """
-    Looks for all stations where a sensor has been deployed. Returns a list of tuple
+    Looks for all the station deployment
     [
-        (station1, date1),
-        (station2, date2),
+        ((lat, lon, depth), date1),
+        ((lat, lon, depth), date2),
         ...
     ]
     """
     assert type(mc) is MetadataCollector
-    assert type(sensor_doc) is dict
-    sensor_name = sensor_doc["#id"]
+    if type(station) is str:
+        station = mc.get_document("stations", station)
+    elif type(station) is dict:
+        pass
+    else:
+        raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
+
+    station_id = station["#id"]
     deployments = []  # array of (stationId, deploymentTime)
 
-    # Get all activities with type=deployment and involving this sensor
-    hist = mc.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@sensors": sensor_name})
+    # Get all activities with type=deployment and involving this station
+    hist = mc.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@stations": station_id})
+
     for dep in hist:
         deployment_time = dep["time"]
+
         # The deployment station can be at the 'appliedTo' or at 'where' section
-        if "@stations" in dep["appliedTo"].keys():
-            station = dep["appliedTo"]["@stations"]
-        elif "@stations" in dep["where"].keys():
-            station = dep["where"]["@stations"]
-        else:
-            raise LookupError(f"Activity {hist['#id']} should include @stations in 'where' or in 'appliedTo'")
-        deployments.append((station, deployment_time))
+        if "position" not in dep["where"].keys():
+            raise ValueError("A station deployment should ALWAYS use a 'position'")
+
+        deployments.append((dep, deployment_time))
 
     if len(deployments) == 0:
-        raise LookupError(f"No deployments found for sensor {sensor_name}")
+        raise LookupError(f"No deployments found for station {station_id}")
+
+    deployments = sorted(deployments, key=lambda x: x[1])  # order by time
     return deployments
 
 
@@ -780,9 +770,9 @@ def get_station_coordinates(mc: MetadataCollector, station: any) -> (float, floa
         pass
     else:
         raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
-    deployments = get_station_deployments(mc, station['#id'])
+    deployments = get_station_deployments(mc, station)
 
-    for deployment in reversed(deployments):
+    for deployment, time in reversed(deployments):
         # Get the latest deployment
         latitude = deployment["where"]["position"]["latitude"]
         longitude = deployment["where"]["position"]["longitude"]

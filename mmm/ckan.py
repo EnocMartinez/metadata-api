@@ -189,11 +189,13 @@ class CkanClient:
             url = self.url + f"resource_patch"
             return self.ckan_patch(url, datadict)
         else:
-            rich.print(f"Registering {package_id}...")
+            rich.print(f"Registering new resource '{resource_id}'...")
             url = self.url + "resource_create"
+            print(url)
+            rich.print(datadict)
+            input()
             return self.ckan_post(url, datadict)
 
-        return self.ckan_post(url, datadict, file=upload_file)
 
     def check_if_package_exists(self, id):
         """

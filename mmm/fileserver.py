@@ -12,8 +12,8 @@ created: 23/3/21
 
 import os
 import shutil
-import rich
-from .common import run_subprocess, LoggerSuperclass, BLU
+import socket
+from .common import run_subprocess, LoggerSuperclass, BLU, run_over_ssh
 
 
 def is_absolute_path(path):
@@ -55,6 +55,11 @@ class FileServer(LoggerSuperclass):
         else:
             self.path_links = []
 
+        try:
+            socket.gethostbyname(self.host)
+        except socket.gaierror:
+            raise ValueError(f"Host {self.host} could not be resolved")
+
     def path2url(self, path: str):
         assert type(path) is str, "expected string"
 
@@ -91,10 +96,8 @@ class FileServer(LoggerSuperclass):
         """
         assert type(path) is str, "path must be a string!"
         assert type(file) is str, "file must be a string!"
-        assert os.path.exists(file), "file does not exist!"
-
-        if not os.path.exists(file):
-            raise ValueError(f"file {file} does not exist!")
+        if not dry_run:
+            assert os.path.exists(file), "file does not exist!"
 
         if file.startswith("./"):
             file = file[2:]
@@ -118,7 +121,7 @@ class FileServer(LoggerSuperclass):
                 shutil.copy2(file, dest_file)
             else:
                 # Creating folder (just in case)
-                run_subprocess(["ssh", self.host, f"mkdir -p {path}"])
+                run_over_ssh(self.host, f"mkdir -p {path}", fail_exit=True)
                 # Run rsync process
                 run_subprocess(["rsync", file, f"{self.host}:{dest_file}"])
                 self.info(f"rsync from {file} to {self.host}:{dest_file}")
@@ -128,3 +131,25 @@ class FileServer(LoggerSuperclass):
         if indexed:
             return self.path2url(dest_file)
         return dest_file
+
+    def recv_file(self, remote_file: str, folder: str):
+        """
+        Get a file from the fileserver
+        :param remote_file: remote file (full path)
+        :param folder: local folder where to store
+        :returns: local filename
+        """
+        assert type(remote_file) is str, "path must be a string!"
+        assert type(folder) is str, "file must be a string!"
+
+        local_file = os.path.join(folder, os.path.basename(remote_file))
+        if os.uname().nodename == self.host or self.host == "localhost":
+            self.info(f"Local copy from {remote_file} to {folder}")
+            os.makedirs(folder, exist_ok=True)
+            shutil.copy2(remote_file, local_file)
+        else:
+            # Run rsync process
+            run_subprocess(["rsync", f"{self.host}:{remote_file}", local_file])
+            self.info(f"rsync from {self.host}:{remote_file} to {local_file}")
+
+        return local_file

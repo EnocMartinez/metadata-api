@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This file implements the DataCollector, a class implementing generic data access
+This file implements the DataCollector, a class implementing generic data access and delivery.
 
 author: Enoc Martínez
 institution: Universitat Politècnica de Catalunya (UPC)
@@ -9,27 +9,35 @@ license: MIT
 created: 30/11/22
 """
 import logging
-
+import jsonschema
 import pandas as pd
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
-from .common import run_subprocess, check_url, detect_common_path, run_over_ssh
+from .common import run_subprocess, check_url, detect_common_path, run_over_ssh, LoggerSuperclass
 from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
+from .dataset import DataExporter
 import rich
 import os
 import json
 import emso_metadata_harmonizer as mh
+from .schemas import dataset_exporter_conf, dataset_exporter_formats
+from mmm import DatasetObject
 
 
 def init_data_collector(secrets: dict, log: logging.Logger, mc: MetadataCollector = None, sta: SensorThingsApiDB = None):
     return DataCollector(secrets, log, mc=mc, sta=sta)
 
 
-class DataCollector:
-    def __init__(self, secrets: dict, log, mc: MetadataCollector = None, sta: SensorThingsApiDB = None):
 
+class DataCollector(LoggerSuperclass):
+    """
+    This class implements all methods to collect data from Databases and FileSystems, generate datasets and
+    deliver them to the proper service.
+    """
+    def __init__(self, secrets: dict, log, mc: MetadataCollector = None, sta: SensorThingsApiDB = None):
+        LoggerSuperclass.__init__(self, log, "DC")
         if not mc:
             self.mc = init_metadata_collector(secrets)
         else:
@@ -43,16 +51,43 @@ class DataCollector:
             self.sta = sta
         self.fileserver = FileServer(secrets["fileserver"], log)
 
-    def generate(self, dataset_id: str, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder: str,
-                 ckan: CkanClient, force=False, format="") -> str:
+    def dataset_filename(self, dataset: dict, fmt: str, tstart: pd.Timestamp, tend: pd.Timestamp,
+                         tmp_folder="temp") -> str:
+        """
+        Based on the configuration, generate the dataset filename
+        """
+        assert type(dataset) is dict
+        assert type(tstart) is pd.Timestamp
+        assert type(tend) is pd.Timestamp
+
+        # convert from dataset_exporter_formats to real extensions
+        extensions = {
+            "netcdf": ".nc",
+            "csv": ".csv",
+            "zip": ".zip"
+        }
+
+        dataset_id = dataset["#id"]
+        os.makedirs(tmp_folder, exist_ok=True)
+        filename = dataset_id + "_" + tstart.strftime("%Y%m%d") + "_" + tend.strftime("%Y%m%d") + extensions[fmt]
+        return os.path.join(tmp_folder, filename)
+
+    def generate_dataset(self, dataset_id: str, export: str, time_start: pd.Timestamp, time_end: pd.Timestamp,
+                         fmt: str="") -> DatasetObject:
         """
         Generates a dataset based on its configuration stored in MongoDB
         :param dataset_id: #id of the dataset
-        :param outfile: output filename
+        :param export: dataset_exporter_conf dict object (export configuration for one service)
+        :param time_start: dataset time start
+        :param time_end: dataset time end
+        :param format: overwrite original format (e.g. csv instead of netcdf)
         :return: Dataset file
         """
-        os.makedirs(out_folder, exist_ok=True)
+        # get the dataset config
         conf = self.mc.get_document("datasets", dataset_id)
+
+        if export not in conf["export"].keys():
+            raise ValueError(f"Dataset {conf['#id']} doesn't have export configuration for service '{export}'")
 
         if type(time_start) is str:
             time_start = pd.Timestamp(time_start)
@@ -71,59 +106,26 @@ class DataCollector:
                 time_end = ctime_end
                 rich.print(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
 
-        if conf["dataSource"] == "sensorthings":
-            if format.lower() == "csv":
-                dataset_file, dataset_url, file_type = self.csv_from_sta(conf, time_start, time_end, out_folder, force)
-            elif format.lower() in ["nc", "netcdf"]:
-                dataset_file, dataset_url, file_type = self.netcdf_from_sta(conf, time_start, time_end, out_folder, force)
-            else:
-                raise ValueError(f"Unknwon dataSource format '{format}'")
-
-        elif conf["dataSource"] == "filesystem":
-            dataset_file, dataset_url, file_type = self.zip_from_filesystem(conf, time_start, time_end, out_folder, force)
-
+        # Generate the dataset filename
+        if not fmt:
+            fmt = conf["export"][export]["format"]
         else:
-            raise ValueError(f"data_source='{conf['dataSource']}' not implemented")
+            assert fmt in dataset_exporter_formats, f"Format '{fmt}' not allowed"
 
-        if not check_url(dataset_url):
-            raise ValueError(f"Dataset URL not reachable: {dataset_url}")
+        if fmt == "csv":
+            filename = self.csv_from_sta(conf, time_start, time_end)
+        elif fmt == "netcdf":
+            filename = self.netcdf_from_sta(conf, time_start, time_end)
+        elif fmt == "zip":
+            filename = self.zip_from_filesystem(conf, time_start, time_end)
+        else:
+            raise ValueError(f"Unknown dataSource format '{fmt}'")
 
-        # Now, let's register the file as a "resource" in a CKAN "package"
-        if ckan:
-            rich.print(f"[cyan]Publishing dataset as CKAN resource")
-            if not dataset_url:
-                raise ValueError("Datset URL not set, has the dataset been exported?")
-            packages = ckan.get_package_list()
-            # Package ID should be the dataset ID in lowercase
-            package_id = conf["#id"].lower()
-
-            if package_id not in packages:
-                raise ValueError(f"Datset {package_id} not published in CKAN!")
-
-            # Make filename without extension the resource ID
-            resource_id = os.path.basename(dataset_file).replace(".", "_")
-
-            start_date = time_start.strftime("%Y-%m-%d")
-            end_date = time_end.strftime("%Y-%m-%d")
-
-            description = f"{file_type} data from {start_date} to {end_date}"
-            name = f"{file_type} data from {start_date} to {end_date}"
-
-            r = ckan.resource_create(
-                package_id,
-                resource_id,
-                description,
-                name,
-                resource_url=dataset_url,
-                format=file_type,
-            )
-            rich.print(f"[cyan]Registered!")
-            rich.print(r)
-
-        return dataset_file, dataset_url
+        obj = DatasetObject(conf, filename, time_start, time_end, fmt)
+        return obj
 
     def dataframe_from_sta(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
-                           time_end: pd.Timestamp):
+                           time_end: pd.Timestamp) -> pd.DataFrame:
         if conf["dataType"] == "timeseries":
             return self.dataframe_from_sta_timeseries(conf, station, sensor, time_start, time_end)
         elif conf["dataType"] == "detections":
@@ -223,7 +225,6 @@ class DataCollector:
         df = df.sort_index(ascending=True)
         return df
 
-
     def dataframe_from_sta_timeseries(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
                                       time_end: pd.Timestamp):
         """
@@ -318,24 +319,14 @@ class DataCollector:
         df = df.sort_index(ascending=True)
         return df
 
-    def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder, force):
+    def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp):
         """
         Generates a NetCDF file from a SensorThings Database
         :param conf:
         :return:
         """
         rich.print("[cyan]Generating NetCDF from a SensorThings API file")
-        rich.print("processing data_source_options...")
-        dataset_id = conf["#id"]
-        filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".nc"
-        local_file = os.path.join(out_folder, filename)
-        remote_path = os.path.join(conf["export"]["path"], dataset_id)
-
-        # Run send_file with dry_run to get the path and not sending the file
-        dataset_url = self.fileserver.send_file(remote_path, local_file, dry_run=True)
-        if not force and check_url(dataset_url):
-            rich.print(f"[yellow]Dataset already exists! URL: {dataset_url}")
-            return filename, dataset_url, "NetCDF"
+        filename = self.dataset_filename(conf, "netcdf", time_start, time_end)
 
         station = self.mc.get_document("stations", conf["@stations"])
 
@@ -354,33 +345,15 @@ class DataCollector:
             m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
             metadata.append(m)
 
-        rich.print(f"[orange3]Creating file {local_file}")
+        call_dataset_generator(dataframes, metadata, output=filename)
+        return filename
 
-        call_dataset_generator(dataframes, metadata, output=local_file)
-
-        rich.print("Delivering NetCDF dataset file ...")
-        dataset_url = self.fileserver.send_file(remote_path, local_file)
-        # We should return (file, url), but we don't have url yet
-        return filename, dataset_url, "NetCDF"
-
-    def csv_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp, out_folder, force):
+    def csv_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp):
         """
         Generates a CSV file from a SensorThings Database
-        :param conf:
-        :return:
         """
         rich.print("[cyan]Generating CSV from a SensorThings API file")
-        rich.print("processing data_source_options...")
-        dataset_id = conf["#id"]
-        filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".csv"
-        local_file = os.path.join(out_folder, filename)
-        remote_path = os.path.join(conf["export"]["path"], dataset_id)
-        remote_file = os.path.join(remote_path, filename)
-        dataset_url = self.fileserver.path2url(remote_file)
-
-        if not force and check_url(dataset_url):
-            rich.print(f"[yellow]Dataset already exists! URL: {dataset_url}")
-            return filename, dataset_url, "CSV"
+        filename = self.dataset_filename(conf, "csv", time_start, time_end)
 
         station = self.mc.get_document("stations", conf["@stations"])
         dataframes = []  # list with a dataframe per variable
@@ -388,39 +361,27 @@ class DataCollector:
         for sensor_name in conf["@sensors"]:
             sensor = self.mc.get_document("sensors", sensor_name)
             df = self.dataframe_from_sta(conf, station, sensor, time_start, time_end)
-
             if len(conf["@sensors"]) > 1:
-                df["SENSOR"] = sensor_name
+                df["SENSOR_ID"] = sensor_name
 
             rich.print(f"[cyan]{sensor_name} data from {time_start} to {time_end}")
             dataframes.append(df)
         df = merge_dataframes(dataframes)
-        os.makedirs(os.path.dirname(local_file), exist_ok=True)
-        df.to_csv(local_file)
+        df.to_csv(filename)
+        return filename
 
-        rich.print("Delivering CSV dataset file ...")
-        self.fileserver.send_file(remote_path, local_file)
-
-        return filename, dataset_url, "CSV"
-
-    def zip_from_filesystem(self, conf, time_start, time_end, out_folder, force) -> str:
+    def zip_from_filesystem(self, conf, time_start, time_end) -> str:
         """
-        Compresses all files in the fileserver into a zip file.
-
-        Required options:
-            dataSourceOptions:
-               path: filesystem raw path (base path for the URL)
+        Compresses all files in the fileserver into a zip file. Since millions of files can be compressed, a small
+        bash script will be generated and transfered to the fileserver and executed there. Then the file will be
+        transfered to the machine running MMAPI
         """
 
-        dataset_id = conf["#id"]
-        dest_path = os.path.join(conf["export"]["path"], dataset_id)
-        filename = dataset_id + "_" + time_start.strftime("%Y%m%d") + "_" + time_end.strftime("%Y%m%d") + ".zip"
-        filename = os.path.join(dest_path, filename)
-        filename_local = os.path.join("/tmp", filename)
+        # Create the dataset in /var/tmp
+        remote_filename = self.dataset_filename(conf, "zip", time_start, time_end, tmp_folder="/var/tmp")
 
         # First step, get all files indexed in the SensorThings database
         datastream_ids = []
-
         for sensor in conf["@sensors"]:
             sensor_id = self.sta.sensor_id_name[sensor]
             # Get the Datastream ID of the files
@@ -448,7 +409,7 @@ class DataCollector:
 
         if len(files) < 1:
             rich.print(f"[red]No files to be zipped!")
-            exit()
+            return ""
 
         # Now convert the file URLs to filesystem paths
         files = [self.fileserver.url2path(f) for f in files]
@@ -472,43 +433,40 @@ class DataCollector:
 
         file_type = files[0].split(".")[-1]
 
-        dataset_url = self.fileserver.path2url(filename)
-        if not force and check_url(dataset_url):
-            rich.print(f"[yellow]Dataset already exists! URL: {dataset_url}")
-            return filename, dataset_url, file_type
-
-        rich.print(f"creating folders...", end="")
-        run_over_ssh(conf["export"]["host"], f"mkdir -p {dest_path}", fail_exit=True)
-        rich.print("[green]done!")
-
         # If the command is too long it cannot be sent via ssh and will raise an OSError, we create a temporal script
         # with the command and send it to the host
-        script_name = os.path.basename(filename).split(".")[0] + ".sh"
-        rich.print(f"[blue]Creating zip script {script_name}...")
+        script_name = os.path.basename(remote_filename).split(".")[0] + ".sh"
+        self.info(f"Creating zip script {script_name}...")
 
         cmd = "#!/bin/bash\n"
         cmd += "echo 'Auto-generated script from MMAPI, compressing files into a zip file'\n"
         cmd += f"cd {basepath}\n"
-        cmd += f"mkdir -p {os.path.dirname(filename)}\n"
-        cmd += f"zip -r {filename} {' '.join(files)}\n"
+        cmd += f"mkdir -p {os.path.dirname(remote_filename)}\n"
+        cmd += f"zip -r {remote_filename} {' '.join(files)}\n"
 
         with open(script_name, "w") as f:
             f.write(cmd)  # write the command to the script
         os.chmod(script_name, 0o775)
-        rich.print(f"[blue]Delivering zip script...")
+
+        self.info(f"Delivering script...")
         script_dest = os.path.join(f"/var/tmp/{script_name}")
         self.fileserver.send_file("/var/tmp", script_name, indexed=False)
 
-        rich.print(f"creating zip file with {len(files)} files, this may take a while...", end="")
-        run_over_ssh(conf["export"]["host"], script_dest)
-        rich.print("[green]done!")
+        self.info(f"Creating zip file with {len(files)} files, this may take a while...")
+        run_over_ssh(self.fileserver.host, script_dest, fail_exit=True)
 
-        rich.print("Removing local script...")
+        # Now get the file
+        self.info(f"get zip file from server...")
+        filename = self.fileserver.recv_file(remote_filename, "tmpdata")
+
+        # delete remote file
+        run_over_ssh(self.fileserver.host, f"rm {remote_filename}")
+        # delete local file
         os.remove(script_name)
-        rich.print("Removing remote script...")
-        run_over_ssh(conf["export"]["host"], f"rm -f {script_dest}")
 
-        return filename, dataset_url, file_type
+        run_over_ssh(self.fileserver.host, f"rm {script_dest}")
+
+        return filename
 
     def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list,
                                  default_data_mode="real-time", os_data_type="OceanSITES time-series data",
@@ -637,14 +595,34 @@ class DataCollector:
         }
         return d
 
+    def upload_datafile_to_ckan(self, ckan, dataset: DatasetObject):
+        """
+        Takes a dataset in the FileServer and publish it to CKAN as a resource
+        """
+        assert type(ckan) is CkanClient
+        assert type(dataset) is DatasetObject
+
+        # The ID of the resource will be the filename in lower case with _<format>
+        resource_id = os.path.basename(dataset.filename).replace(".", "_").lower()
+        package_id = dataset.dataset_id.lower()
+
+        name = f"{dataset.dataset_id} data from {dataset.tstart_str('%Y-%m-%d')} to {dataset.tend_str('%Y-%m-%d')}"
+        description = f"Data in {dataset.fmt} format from {dataset.tstart_str()} to {dataset.tend_str()}"
+        return ckan.resource_create(
+            package_id,
+            resource_id,
+            description=description,
+            name=name,
+            format=dataset.fmt,
+            resource_url=dataset.url)
+
 
 def call_dataset_generator(dataframes: list, metadata: list, output="output.nc"):
     """
-    Dump dataframes and metadata to temporal files and call generator.py from the metadata-harmonizer project
+    Dump dataframes and metadata to temporal files and calls the datasets generator
     :param dataframes:
     :param metadata:
     :param output:
-    :param generator_path:
     :return:
     """
     assert (len(dataframes) == len(metadata))
@@ -661,9 +639,11 @@ def call_dataset_generator(dataframes: list, metadata: list, output="output.nc")
         with open(meta_name, "w") as f:
             json.dump(metadata[i], f, indent=2)
 
-    data = " ".join(csv_files)
-    meta = " ".join(meta_files)
-
-
     mh.generate_dataset(csv_files, meta_files, output=output)
+
+    for d in csv_files:
+        os.remove(d)
+    for m in meta_files:
+        os.remove(m)
+
 

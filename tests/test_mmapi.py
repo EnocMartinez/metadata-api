@@ -24,7 +24,8 @@ from PIL import Image, ImageDraw
 import urllib
 
 try:
-    from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data
+    from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data, propagate_mongodb_to_ckan, \
+        CkanClient, get_station_deployments
 except ModuleNotFoundError:
     # Get the directory of the current script
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -36,8 +37,8 @@ except ModuleNotFoundError:
 
     # add parent
     from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_mongodb_to_sensorthings,
-                     bulk_load_data)
-    from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess
+                     bulk_load_data, propagate_mongodb_to_ckan, CkanClient, get_station_deployments)
+    from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url
     from metadata_api import run_metadata_api
     from sta_timeseries import run_sta_timeseries_api
 
@@ -67,15 +68,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         log = setup_log("mmapi-test")
         log.setLevel(logging.DEBUG)
         LoggerSuperclass.__init__(cls, log, "test")
-        log.info("Setting up system start docker compose... (this may take a while)")
-        run_subprocess("docker compose up -d", fail_exit=True)
-
-        log.info("Setup Metadata Collector...")
-        cls.mc = init_metadata_collector(conf)
-        cls.log = log
-        log.info("Setup Data Collector...")
-        cls.dc = init_data_collector(conf, log, mc=cls.mc)
-        cls.stadb = cls.dc.sta
 
         with open(cls.secrets) as f:
             cls.conf = yaml.safe_load(f)["secrets"]
@@ -90,17 +82,12 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     cls.sta_ts_url = line.split("=")[1].replace("\"", "")
                     break
 
-        log.info("Clearing MongoDB database...")
-        cls.mc.drop_all()
-        cls.dc.sta.drop_all()
-
         # Create volumes for all docker services
         with open("docker-compose.yaml") as f:
             docker_config = yaml.safe_load(f)
 
         cls.docker_volumes = []
-
-        for service in docker_config["services"].values():
+        for name, service in docker_config["services"].items():
             for key, value in service.items():
                 if key == "volumes":
                     for volume in value:
@@ -110,9 +97,34 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                             src, dst, prm = volume.split(":")
                         if "." not in os.path.basename(src):  # if dot in name assume its a folder
                             os.makedirs(src, exist_ok=True, mode=0o777)
-                            rich.print(f"[orange3]Creating folder {src}")
+
                         cls.docker_volumes.append(src)
+
         cls.local_csv_data = "/var/tmp/mmapi/tmpdata/"
+        log.info("Setting up system start docker compose... (this may take a while)")
+        run_subprocess("docker compose up -d --build", fail_exit=True)
+
+        log.info("Setup Metadata Collector...")
+        cls.mc = init_metadata_collector(conf)
+        cls.log = log
+        log.info("Setup Data Collector...")
+        cls.dc = init_data_collector(conf, log, mc=cls.mc)
+        cls.stadb = cls.dc.sta
+
+        log.info("Clearing MongoDB database...")
+        cls.mc.drop_all()
+        cls.dc.sta.drop_all()
+
+        log.info("Setup CkanClient")
+
+        log.info("Let's do somethings quick and dirty to get the ckan_admin key")
+        os.system("docker exec ckan ckan user token add ckan_admin tk1 | tail -n 1 | sed 's/\t//g' >  ckan.key")
+        # If success, we should have now the API key in the ckan.key file
+        with open("ckan.key") as f:
+            ckan_key = f.read().strip()
+        os.remove("ckan.key")
+        cls.ckan = CkanClient(cls.mc, cls.conf["ckan"]["url"], ckan_key)
+
 
     def test_01_launch_metadata_api(self):
         """Run all tests for MMAPI in a sequential manner"""
@@ -128,11 +140,11 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         """adds degC as unit"""
         self.log.info("Inserting several 'units' via API")
         data = {
-          "#id": "degrees_celsius",
-          "name": "degrees Celsius",
-          "symbol": "degC",
-          "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UPAA/",
-          "type": "linear"
+            "#id": "degrees_celsius",
+            "name": "degrees Celsius",
+            "symbol": "degC",
+            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UPAA/",
+            "type": "linear"
         }
         a = self.mc.insert_document("units", data)
         self.assertIsInstance(a, dict)
@@ -158,12 +170,12 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         post_json(self.mmapi_url + "/units", d)
 
         d = {
-          "#id": "TEMP",
-          "standard_name": "sea_water_temperature",
-          "description": "in situ sea water temperature",
-          "definition": "https://vocab.nerc.ac.uk/collection/P01/current/TEMPST01",
-          "cf_compliant": True,
-          "type": "environmental"
+            "#id": "TEMP",
+            "standard_name": "sea_water_temperature",
+            "description": "in situ sea water temperature",
+            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/TEMPST01",
+            "cf_compliant": True,
+            "type": "environmental"
         }
         post_json(self.mmapi_url + "/variables", d)
 
@@ -177,77 +189,77 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         }
         post_json(self.mmapi_url + "/variables", d)
         d = {
-          "#id": "OBSEA:CTD:TEMP",
-          "instrumentType": "CTD",
-          "qartod": {
-            "gross_range_test": {
-              "fail_span": [8,40],
-              "suspect_span": [10,32]
-            },
-            "climatology_test": {
-              "config": [
-                {
-                  "vspan": [10.5, 16],
-                  "tspan": [1, 3],
-                  "period": "month",
-                  "zspan": [0,100]
+            "#id": "OBSEA:CTD:TEMP",
+            "instrumentType": "CTD",
+            "qartod": {
+                "gross_range_test": {
+                    "fail_span": [8, 40],
+                    "suspect_span": [10, 32]
                 },
-                {
-                  "vspan": [12.3,22],
-                  "tspan": [4,6],
-                  "period": "month",
-                  "zspan": [0,100]
+                "climatology_test": {
+                    "config": [
+                        {
+                            "vspan": [10.5, 16],
+                            "tspan": [1, 3],
+                            "period": "month",
+                            "zspan": [0, 100]
+                        },
+                        {
+                            "vspan": [12.3, 22],
+                            "tspan": [4, 6],
+                            "period": "month",
+                            "zspan": [0, 100]
+                        },
+                        {
+                            "vspan": [16, 28.2],
+                            "tspan": [7, 9],
+                            "period": "month",
+                            "zspan": [0, 100]
+                        },
+                        {
+                            "vspan": [12.3, 24],
+                            "tspan": [10, 12],
+                            "period": "month",
+                            "zspan": [0, 100]
+                        }
+                    ]
                 },
-                {
-                  "vspan": [16,28.2],
-                  "tspan": [7,9],
-                  "period": "month",
-                  "zspan": [0,100]
+                "flat_line_test": {
+                    "tolerance": 1e-05,
+                    "suspect_threshold": 100,
+                    "fail_threshold": 300
                 },
-                {
-                  "vspan": [12.3,24],
-                  "tspan": [10,12],
-                  "period": "month",
-                  "zspan": [0,100]
+                "rate_of_change_test": {
+                    "threshold": 0.01
+                },
+                "spike_test": {
+                    "suspect_threshold": 1,
+                    "fail_threshold": 3
                 }
-              ]
-            },
-            "flat_line_test": {
-              "tolerance": 1e-05,
-              "suspect_threshold": 100,
-              "fail_threshold": 300
-            },
-            "rate_of_change_test": {
-              "threshold": 0.01
-            },
-            "spike_test": {
-              "suspect_threshold": 1,
-              "fail_threshold": 3
             }
-          }
         }
         post_json(self.mmapi_url + "/qualityControl", d)
         d = {
-          "#id": "OBSEA:CTD:CNDC",
-          "instrumentType": "CTD",
-          "qartod": {
-            "gross_range_test": {
-              "fail_span": [1,6.5],
-              "suspect_span": [2,6]
-            },
-            "flat_line_test": {
-              "tolerance": 1e-06,
-              "suspect_threshold": 100,
-              "fail_threshold": 300
-            },
-            "spike_test": {
-              "suspect_threshold": 0.05,
-              "fail_threshold": 0.2
-            },
-            "rate_of_change_test": {
-              "threshold": 0.001
+            "#id": "OBSEA:CTD:CNDC",
+            "instrumentType": "CTD",
+            "qartod": {
+                "gross_range_test": {
+                    "fail_span": [1, 6.5],
+                    "suspect_span": [2, 6]
+                },
+                "flat_line_test": {
+                    "tolerance": 1e-06,
+                    "suspect_threshold": 100,
+                    "fail_threshold": 300
+                },
+                "spike_test": {
+                    "suspect_threshold": 0.05,
+                    "fail_threshold": 0.2
+                },
+                "rate_of_change_test": {
+                    "threshold": 0.001
+                }
             }
-          }
         }
         post_json(self.mmapi_url + "/qualityControl", d)
 
@@ -267,15 +279,15 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     def test_05_add_process(self):
         """Adding average process"""
         avg = {
-          "#id": "average",
-          "type": "average",
-          "name": "Simple average the measure",
-          "description": "Averages sensor variables over a period of time (period parameter, e.g. 30min, 1day). If a "
-                         "certain variable should not be averaged, add it to the ignore list",
-          "parameters": {
-            "period": "period to average (string)",
-            "ignore": "list of variables to ignore when averaging"
-          }
+            "#id": "average",
+            "type": "average",
+            "name": "Simple average the measure",
+            "description": "Averages sensor variables over a period of time (period parameter, e.g. 30min, 1day). If a "
+                           "certain variable should not be averaged, add it to the ignore list",
+            "parameters": {
+                "period": "period to average (string)",
+                "ignore": "list of variables to ignore when averaging"
+            }
         }
         self.mc.insert_document("processes", avg)
 
@@ -306,221 +318,242 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     def test_07_station(self):
         """Register station and its deployment"""
         d = {
-          "#id": "OBSEA",
-          "shortName": "OBSEA",
-          "longName": "OBSEA Expandable Seafloor Observatory",
-          "description": "OBSEA is a cabled seafloor observatory deployed at the North-west mediterranean (Vilanova i"
-                         " la Geltrú, Spain)",
-          "platformType": {
-            "definition": "http://vocab.nerc.ac.uk/collection/L06/current/48/",
-            "label": "mooring"
-          },
-          "emsoFacility": "OBSEA",
-          "contacts": [
-            {
-              "@people": "enoc_martinez",
-              "role": "dataManager"
+            "#id": "OBSEA",
+            "shortName": "OBSEA",
+            "longName": "OBSEA Expandable Seafloor Observatory",
+            "description": "OBSEA is a cabled seafloor observatory deployed at the North-west mediterranean (Vilanova i"
+                           " la Geltrú, Spain)",
+            "platformType": {
+                "definition": "http://vocab.nerc.ac.uk/collection/L06/current/48/",
+                "label": "mooring"
             },
-            {
-              "@organizations": "upc",
-              "role": "owner"
-            },
-          ],
+            "emsoFacility": "OBSEA",
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "dataManager"
+                },
+                {
+                    "@organizations": "upc",
+                    "role": "owner"
+                },
+            ],
             "defaults": {
                 "@programmes": "OBSEA"
             }
         }
         self.mc.insert_document("stations", d)
+
         d = {
-          "#id": "OBSEA_deployment_20090519",
-          "name": "OBSEA initial deployment",
-          "time": "2009-05-19T00:00:00Z",
-          "type": "deployment",
-          "appliedTo": {
-            "@stations": "OBSEA"
-          },
-          "where": {
-            "position": {
-              "depth": 20.0,
-              "latitude": 41.18212,
-              "longitude": 1.75257
-            }
-          },
-          "description": "Initial OBSEA deployment"
-        }
+            "#id": "OBSEA_deployment_20090519",
+            "name": "OBSEA initial deployment",
+            "time": "2009-05-19T00:00:00Z",
+            "type": "deployment",
+            "appliedTo": {
+                "@stations": "OBSEA"
+            },
+            "where": {
+                "position": {
+                    "depth": 20.0,
+                    "latitude": 41.18212,
+                    "longitude": 1.75257
+                }
+            },
+            "description": "Initial OBSEA deployment"
+        }  # OBSEA deployment
         self.mc.insert_document("activities", d)
+
+        d = {
+            "#id": "OBSEA_deployment_20150519",
+            "name": "OBSEA second deployment",
+            "time": "2015-05-19T00:00:00Z",
+            "type": "deployment",
+            "appliedTo": {
+                "@stations": "OBSEA"
+            },
+            "where": {
+                "position": {
+                    "depth": 20.0,
+                    "latitude": 41.18212,
+                    "longitude": 1.75257
+                }
+            },
+            "description": "Initial OBSEA deployment"
+        }  # OBSEA older deployment
+        self.mc.insert_document("activities", d)
+        self.assertEqual(len(get_station_deployments(self.mc, "OBSEA")), 2)
 
     def test_08_add_sensor(self):
         """Adding sensor"""
         d = {
-          "#id": "SBE37",
-          "description": "SBE37 CTD sensor at OBSEA",
-          "shortName": "SBE37",
-          "serialNumber": "37SMP47472-5496",
-          "longName": "CTD SBE37 at OBSEA",
-          "instrumentType": {
-            "id": "CTD",
-            "definition": "http://vocab.nerc.ac.uk/collection/L05/current/130",
-            "label": "CTD"
-          },
-          "manufacturer": {
-            "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0013/",
-            "label": "Sea-Bird Scientific"
-          },
-          "model": {
-            "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL1457/",
-            "label": "SBE 37 MicroCat SMP-CTP"
-          },
-          "variables": [
-            {
-              "@variables": "TEMP",
-              "@units": "degrees_celsius",
-              "@qualityControl": "OBSEA:CTD:TEMP",
-              "dataType": "timeseries"
+            "#id": "SBE37",
+            "description": "SBE37 CTD sensor at OBSEA",
+            "shortName": "SBE37",
+            "serialNumber": "37SMP47472-5496",
+            "longName": "CTD SBE37 at OBSEA",
+            "instrumentType": {
+                "id": "CTD",
+                "definition": "http://vocab.nerc.ac.uk/collection/L05/current/130",
+                "label": "CTD"
             },
-            {
-              "@variables": "CNDC",
-              "@units": "siemens_per_metre",
-              "@qualityControl": "OBSEA:CTD:CNDC",
-              "dataType": "timeseries"
+            "manufacturer": {
+                "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0013/",
+                "label": "Sea-Bird Scientific"
             },
-            {
-              "@variables": "TEMP",
-              "@units": "degrees_celsius",
-              "@qualityControl": "OBSEA:CTD:TEMP",
-              "dataType": "profiles"
+            "model": {
+                "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL1457/",
+                "label": "SBE 37 MicroCat SMP-CTP"
             },
-            {
-              "@variables": "CNDC",
-              "@units": "siemens_per_metre",
-              "@qualityControl": "OBSEA:CTD:CNDC",
-              "dataType": "profiles"
-            },
-          ],
-          "processes": [
-            {
-              "@processes": "average",
-              "parameters": {
-                "period": "30min",
-                "ignore": []
-              }
-            },
-            {
-              "@processes": "average",
-              "parameters": {
-                "period": "1day",
-                "ignore": []
-              }
-            }
-          ],
-          "contacts": [
-            {
-              "@people": "enoc_martinez",
-              "role": "dataManager"
-            }
-          ]
+            "variables": [
+                {
+                    "@variables": "TEMP",
+                    "@units": "degrees_celsius",
+                    "@qualityControl": "OBSEA:CTD:TEMP",
+                    "dataType": "timeseries"
+                },
+                {
+                    "@variables": "CNDC",
+                    "@units": "siemens_per_metre",
+                    "@qualityControl": "OBSEA:CTD:CNDC",
+                    "dataType": "timeseries"
+                },
+                {
+                    "@variables": "TEMP",
+                    "@units": "degrees_celsius",
+                    "@qualityControl": "OBSEA:CTD:TEMP",
+                    "dataType": "profiles"
+                },
+                {
+                    "@variables": "CNDC",
+                    "@units": "siemens_per_metre",
+                    "@qualityControl": "OBSEA:CTD:CNDC",
+                    "dataType": "profiles"
+                },
+            ],
+            "processes": [
+                {
+                    "@processes": "average",
+                    "parameters": {
+                        "period": "30min",
+                        "ignore": []
+                    }
+                },
+                {
+                    "@processes": "average",
+                    "parameters": {
+                        "period": "1day",
+                        "ignore": []
+                    }
+                }
+            ],
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "dataManager"
+                }
+            ]
         }  # SBE37
         self.mc.insert_document("sensors", d)
         d = {
-          "#id": "SBE16",
-          "description": "SBE16 CTD sensor at OBSEA",
-          "shortName": "SBE16",
-          "serialNumber": "16XXXX",
-          "longName": "CTD SBE16 at OBSEA",
-          "instrumentType": {
-            "id": "CTD",
-            "definition": "http://vocab.nerc.ac.uk/collection/L05/current/130",
-            "label": "CTD"
-          },
-          "manufacturer": {
-            "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0013/",
-            "label": "Sea-Bird Scientific"
-          },
-          "model": {
-            "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL1457/",
-            "label": "SBE 16 MicroCat SMP-CTP"
-          },
-          "variables": [
-            {
-              "@variables": "TEMP",
-              "@units": "degrees_celsius",
-              "@qualityControl": "OBSEA:CTD:TEMP",
-              "dataType": "timeseries"
+            "#id": "SBE16",
+            "description": "SBE16 CTD sensor at OBSEA",
+            "shortName": "SBE16",
+            "serialNumber": "16XXXX",
+            "longName": "CTD SBE16 at OBSEA",
+            "instrumentType": {
+                "id": "CTD",
+                "definition": "http://vocab.nerc.ac.uk/collection/L05/current/130",
+                "label": "CTD"
             },
-            {
-              "@variables": "CNDC",
-              "@units": "siemens_per_metre",
-              "@qualityControl": "OBSEA:CTD:CNDC",
-              "dataType": "timeseries"
+            "manufacturer": {
+                "definition": "http://vocab.nerc.ac.uk/collection/L35/current/MAN0013/",
+                "label": "Sea-Bird Scientific"
             },
-            {
-              "@variables": "TEMP",
-              "@units": "degrees_celsius",
-              "@qualityControl": "OBSEA:CTD:TEMP",
-              "dataType": "profiles"
+            "model": {
+                "definition": "http://vocab.nerc.ac.uk/collection/L22/current/TOOL1457/",
+                "label": "SBE 16 MicroCat SMP-CTP"
             },
-            {
-              "@variables": "CNDC",
-              "@units": "siemens_per_metre",
-              "@qualityControl": "OBSEA:CTD:CNDC",
-              "dataType": "profiles"
-            },
-          ],
-          "processes": [
-            {
-              "@processes": "average",
-              "parameters": {
-                "period": "30min",
-                "ignore": []
-              }
-            },
-            {
-              "@processes": "average",
-              "parameters": {
-                "period": "1day",
-                "ignore": []
-              }
-            }
-          ],
-          "contacts": [
-            {
-              "@people": "enoc_martinez",
-              "role": "dataManager"
-            }
-          ]
+            "variables": [
+                {
+                    "@variables": "TEMP",
+                    "@units": "degrees_celsius",
+                    "@qualityControl": "OBSEA:CTD:TEMP",
+                    "dataType": "timeseries"
+                },
+                {
+                    "@variables": "CNDC",
+                    "@units": "siemens_per_metre",
+                    "@qualityControl": "OBSEA:CTD:CNDC",
+                    "dataType": "timeseries"
+                },
+                {
+                    "@variables": "TEMP",
+                    "@units": "degrees_celsius",
+                    "@qualityControl": "OBSEA:CTD:TEMP",
+                    "dataType": "profiles"
+                },
+                {
+                    "@variables": "CNDC",
+                    "@units": "siemens_per_metre",
+                    "@qualityControl": "OBSEA:CTD:CNDC",
+                    "dataType": "profiles"
+                },
+            ],
+            "processes": [
+                {
+                    "@processes": "average",
+                    "parameters": {
+                        "period": "30min",
+                        "ignore": []
+                    }
+                },
+                {
+                    "@processes": "average",
+                    "parameters": {
+                        "period": "1day",
+                        "ignore": []
+                    }
+                }
+            ],
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "dataManager"
+                }
+            ]
         }  # SBE16
         self.mc.insert_document("sensors", d)
 
         d = {
-          "#id": "sbe37depl",
-          "name": "SBE37 deployment",
-          "time": "2023-01-01T00:00:00Z",
-          "type": "deployment",
-          "appliedTo": {
-            "@sensors": [
-              "SBE37"
-            ]
-          },
-          "where": {
-            "@stations": "OBSEA"
-          },
-          "description": "Desplegat el SBE37 a l'OBSEA"
+            "#id": "sbe37depl",
+            "name": "SBE37 deployment",
+            "time": "2023-01-01T00:00:00Z",
+            "type": "deployment",
+            "appliedTo": {
+                "@sensors": [
+                    "SBE37"
+                ]
+            },
+            "where": {
+                "@stations": "OBSEA"
+            },
+            "description": "Desplegat el SBE37 a l'OBSEA"
         }  # SBE37 deployment
         self.mc.insert_document("activities", d)
         d = {
-          "#id": "sbe16depl",
-          "name": "SBE16 deployment",
-          "time": "2022-01-01T00:00:00Z",
-          "type": "deployment",
-          "appliedTo": {
-            "@sensors": [
-              "SBE16"
-            ]
-          },
-          "where": {
-            "@stations": "OBSEA"
-          },
-          "description": "Desplegat el SBE16 a l'OBSEA"
+            "#id": "sbe16depl",
+            "name": "SBE16 deployment",
+            "time": "2022-01-01T00:00:00Z",
+            "type": "deployment",
+            "appliedTo": {
+                "@sensors": [
+                    "SBE16"
+                ]
+            },
+            "where": {
+                "@stations": "OBSEA"
+            },
+            "description": "Desplegat el SBE16 a l'OBSEA"
         }  # SBE16 deployment
         self.mc.insert_document("activities", d)
 
@@ -691,23 +724,23 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "role": "owner"
                 }
             ]
-        } # AWAC sensor
+        }  # AWAC sensor
         post_json(self.mmapi_url + "/sensors", d)
 
         d = {
-          "#id": "awacdeployment",
-          "name": "SBE37 deployment",
-          "time": "2023-01-01T00:00:00Z",
-          "type": "deployment",
-          "appliedTo": {
-            "@sensors": [
-              "AWAC"
-            ]
-          },
-          "where": {
-            "@stations": "OBSEA"
-          },
-          "description": "Desplegat el SBE37 a l'OBSEA"
+            "#id": "awacdeployment",
+            "name": "SBE37 deployment",
+            "time": "2023-01-01T00:00:00Z",
+            "type": "deployment",
+            "appliedTo": {
+                "@sensors": [
+                    "AWAC"
+                ]
+            },
+            "where": {
+                "@stations": "OBSEA"
+            },
+            "description": "Desplegat el SBE37 a l'OBSEA"
         }  # AWAC deployment
         self.mc.insert_document("activities", d)
 
@@ -740,7 +773,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "definition": "https://vocab.nerc.ac.uk/collection/P02/current/FATX/",
             "cf_compliant": False,
             "type": "environmental"
-        } # FATX (fish abundance)
+        }  # FATX (fish abundance)
         post_json(self.mmapi_url + "/variables", d)
 
         d = {
@@ -766,25 +799,25 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         post_json(self.mmapi_url + "/variables", d)
 
         d = {
-                "#id": "YOLOv8",
-                "name": "YOLOv8l_18sp_2361img",
-                "algorithm": "YOLOv8",
-                "type": "inference",
-                "description": "YOLOv8 large trained with 18 species, 2361 images, learning rate 0.000375 and image size 1920 px",
-                "notes": "Variable names correspond to @variables standard_name field",
-                "weights": "https://my.url/file",
-                "trainingConfig": "https://my.url/filex",
-                "trainingData": "",
-                "variable_names": [
-                    "Chromis chromis",
-                    "Diplodus vulgaris",
-                    "Diver"
-                ],
-                "ignore": [
-                    "Diver"
-                ],
-                "parameters": {}
-            }  # YOLOv8 process
+            "#id": "YOLOv8",
+            "name": "YOLOv8l_18sp_2361img",
+            "algorithm": "YOLOv8",
+            "type": "inference",
+            "description": "YOLOv8 large trained with 18 species, 2361 images, learning rate 0.000375 and image size 1920 px",
+            "notes": "Variable names correspond to @variables standard_name field",
+            "weights": "https://my.url/file",
+            "trainingConfig": "https://my.url/filex",
+            "trainingData": "",
+            "variable_names": [
+                "Chromis chromis",
+                "Diplodus vulgaris",
+                "Diver"
+            ],
+            "ignore": [
+                "Diver"
+            ],
+            "parameters": {}
+        }  # YOLOv8 process
         post_json(self.mmapi_url + "/processes", d)
 
         d = {
@@ -838,17 +871,17 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         post_json(self.mmapi_url + "/sensors", d)
 
         d = {
-          "#id": "ipc_camera_deployment",
-          "name": "IPC608 deployment",
-          "time": "2023-01-01T00:00:00Z",
-          "type": "deployment",
-          "appliedTo": {
-            "@sensors": ["IPC608"]
-          },
-          "where": {
-            "@stations": "OBSEA"
-          },
-          "description": "Desplegat el IPC608 a l'OBSEA"
+            "#id": "ipc_camera_deployment",
+            "name": "IPC608 deployment",
+            "time": "2023-01-01T00:00:00Z",
+            "type": "deployment",
+            "appliedTo": {
+                "@sensors": ["IPC608"]
+            },
+            "where": {
+                "@stations": "OBSEA"
+            },
+            "description": "Desplegat el IPC608 a l'OBSEA"
         }  # IPC608 camera deployment
         post_json(self.mmapi_url + "/activities", d)
 
@@ -871,7 +904,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             },
             "ourBudget": 43750.0,
             "logoUrl": ""
-            }
+        }
         self.mc.insert_document("projects", d)
 
     def test_13_add_datasets(self):
@@ -890,10 +923,20 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "fullData": True
             },
             "export": {
-                "namePattern": "obsea_ctd_full_${date_start}_${date_end}.nc",
-                "period": "daily",
-                "path": "/var/tmp/mmapi/volumes/files/",
-                "host": "localhost"
+                "erddap": {
+                    "host": "localhost",
+                    "fileTreeLevel": "monthly",
+                    "path": "./erddapData/obsea_ctd_full",
+                    "period": "daily",
+                    "format": "netcdf"
+                },
+                "fileserver": {
+                    "host": "localhost",
+                    "fileTreeLevel": "none",
+                    "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
+                    "period": "yearly",
+                    "format": "netcdf"
+                }
             },
             "contacts": [
                 {
@@ -931,10 +974,20 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             },
             "dataType": "files",
             "export": {
-                "namePattern": "obsea_ctd_full_${date_start}_${date_end}.nc",
-                "period": "daily",
-                "path": "/var/tmp/mmapi/volumes/files/",
-                "host": "localhost"
+                "erddap": {
+                    "host": "localhost",
+                    "fileTreeLevel": "monthly",
+                    "path": "./erddapData/IPC608_pics",
+                    "period": "daily",
+                    "format": "netcdf"
+                },
+                "fileserver": {
+                    "host": "localhost",
+                    "fileTreeLevel": "none",
+                    "path": "/var/tmp/mmapi/volumes/files/datasets/IPC608_pics",
+                    "period": "yearly",
+                    "format": "zip"
+                }
             },
             "contacts": [
                 {
@@ -974,7 +1027,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # Generate sine wave values
         frequency = 1
         dates = pd.date_range(start='2023-01-01', end="2023-01-02", freq='30min')
-        tvector = np.arange(0, len(dates))/1000
+        tvector = np.arange(0, len(dates)) / 1000
         # Create a pandas DataFrame
         df = pd.DataFrame({
             'timestamp': dates,
@@ -1048,7 +1101,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # Generate sine wave values
         frequency = 1
         dates = pd.date_range(start='2023-01-01', end="2023-01-31", freq='100s')
-        tvector = np.arange(0, len(dates))/1000
+        tvector = np.arange(0, len(dates)) / 1000
         # Create a pandas DataFrame
         df = pd.DataFrame({
             'timestamp': dates,
@@ -1090,7 +1143,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         frequency = 1
         dates = pd.date_range(start='2023-01-01', end="2023-01-02", freq='12h')
         depths = np.arange(0, 10)
-        tvector = np.arange(0, len(dates))/1000
+        tvector = np.arange(0, len(dates)) / 1000
         data = {
             "timestamp": [],
             "depth": [],
@@ -1136,7 +1189,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         frequency = 1
         dates = pd.date_range(start='2023-01-01', end="2023-01-02", freq='30min')
         depths = np.arange(0, 10)
-        tvector = np.arange(0, len(dates))/1000
+        tvector = np.arange(0, len(dates)) / 1000
         data = {
             "timestamp": [],
             "depth": [],
@@ -1193,7 +1246,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         frequency = 1
         dates = pd.date_range(start='2023-01-01', end="2023-01-02", freq='30min')
         depths = np.arange(0, 10)
-        tvector = np.arange(0, len(dates))/1000
+        tvector = np.arange(0, len(dates)) / 1000
         data = {
             "timestamp": [],
             "depth": [],
@@ -1249,8 +1302,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         for i in range(1, 10):
             image = Image.new('RGB', (width, height), 'white')  # Create a white background image
             draw = ImageDraw.Draw(image)
-            top_left = (50 + i*10, 50 + i*10)  # Top-left corner of the rectangle
-            bottom_right = (150 + i*10, 150 + i*10)  # Bottom-right corner of the rectangle
+            top_left = (50 + i * 10, 50 + i * 10)  # Top-left corner of the rectangle
+            bottom_right = (150 + i * 10, 150 + i * 10)  # Bottom-right corner of the rectangle
             rectangle_color = 'blue'  # Color of the rectangle
             draw.rectangle([top_left, bottom_right], fill=rectangle_color)
             f = f'rectangle_blue_{i:02d}.jpg'
@@ -1299,8 +1352,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         for i in range(1, 100):
             image = Image.new('RGB', (width, height), 'white')  # Create a white background image
             draw = ImageDraw.Draw(image)
-            top_left = (50 + i*10, 50 + i*10)  # Top-left corner of the rectangle
-            bottom_right = (150 + i*10, 150 + i*10)  # Bottom-right corner of the rectangle
+            top_left = (50 + i * 10, 50 + i * 10)  # Top-left corner of the rectangle
+            bottom_right = (150 + i * 10, 150 + i * 10)  # Bottom-right corner of the rectangle
             rectangle_color = 'red'  # Color of the rectangle
             draw.rectangle([top_left, bottom_right], fill=rectangle_color)
             filename = f"rectangle_red_{i:03d}.jpg"
@@ -1398,7 +1451,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         df = pd.DataFrame(data)
         datafile = "test51-detections.csv"
         df.to_csv(datafile)
-        bulk_load_data(datafile, self.conf["sensorthings"], self.sta_url, "IPC608", "detections", tmp_folder="./tmpdata")
+        bulk_load_data(datafile, self.conf["sensorthings"], self.sta_url, "IPC608", "detections",
+                       tmp_folder="./tmpdata")
         os.remove(datafile)
 
         # Now, let's download all the data that we injected, see if it's available
@@ -1411,7 +1465,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         results = data["value"]
         self.assertEqual(len(results), len(pictures))
 
-    def test_70_no_full_data_in_observations(self):
+    def test_60_no_full_data_in_observations(self):
         sta = self.dc.sta
         sta.initialize_dicts()
         # Make sure that we do not have any fullData timeseries/profiles/detections in OBSERVATIONS
@@ -1440,7 +1494,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.log.setLevel(lvl)
         self.assertEqual(len(wrong_datastreams), 1)
 
-    def test_71_correct_data_in_hypertables(self):
+    def test_61_correct_data_in_hypertables(self):
         """check that only the correct data is stored in the hypertables"""
         sta = self.dc.sta
         lvl = self.log.getEffectiveLevel()
@@ -1494,19 +1548,63 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.dc.sta.exec_query(f"delete from detections where datastream_id = {timeseries_id};", fetch=False)
         self.dc.sta.exec_query(f"delete from profiles where datastream_id = {detections_id};", fetch=False)
 
-    def test_80_create_timeseries_dataset(self):
+    def test_70_propagate_to_ckan(self):
+        rich.print("==== setup CKAN ====")
+        propagate_mongodb_to_ckan(self.mc, self.ckan, collections=[])
+
+    def test_71_generate_fileserver_datasets(self):
         """Creating a dataset"""
         os.makedirs("datasets", exist_ok=True)
-        self.dc.generate("obsea_ctd_full", "2020-01-01", "2030-01-01", "datasets", None, format="csv")
-        rich.print("[green]CSV dataset ok!")
+        # Export CSV
+        dataset_id = "obsea_ctd_full"
+        csv_dataset = self.dc.generate_dataset(dataset_id, "fileserver", "2020-01-01", "2021-01-01", fmt="csv")
+        csv_dataset.deliver("fileserver", self.dc.fileserver)
+        print(csv_dataset)
+        self.assertTrue(check_url(csv_dataset.url))
+        self.dc.upload_datafile_to_ckan(self.ckan, csv_dataset)
 
-        self.dc.generate("obsea_ctd_full", "2020-01-01", "2030-01-01", "datasets", None, format="nc")
+        # Export NetCDF
+        nc_dataset = self.dc.generate_dataset("obsea_ctd_full", "fileserver", "2020-01-01", "2030-01-01")
+        nc_dataset.deliver("fileserver", self.dc.fileserver)
+        print(nc_dataset)
+        self.assertTrue(check_url(nc_dataset.url))
+        self.dc.upload_datafile_to_ckan(self.ckan, nc_dataset)
 
-        self.dc.generate("IPC608_pics", "2020-01-01", "2030-01-01", "datasets", None, format="zip")
+        # Force error in format
+        # Export NetCDF
+        with self.assertRaises(AssertionError):
+            self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-01-01", fmt="potato")
+
+        zip_dataset = self.dc.generate_dataset("IPC608_pics", "fileserver", "2020-01-01", "2030-01-01")
+        zip_dataset.deliver("fileserver", self.dc.fileserver)
+        print(zip_dataset)
+        self.assertTrue(check_url(zip_dataset.url))
+        self.dc.upload_datafile_to_ckan(self.ckan, zip_dataset)
+
+    def test_80_config_erddap(self):
+        """creates a dataset and upload it to ERDDAP"""
+        url = self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-01-01", fmt="csv")
+        rich.print(url)
+        self.ckan.resource_create("obsea_ctd_full")
 
     @classmethod
     def tearDownClass(cls):
         cls.log.info("stopping containers")
+
+        if False:
+            run_subprocess("docker compose down")
+            for volume in cls.docker_volumes:
+                if not os.path.isdir(volume):
+                    continue  # ignore volume files
+                for f in file_list(volume):
+                    os.remove(f)
+
+                for d in dir_list(volume):
+                    os.rmdir(d)
+
+            for volume in cls.docker_volumes:
+                if os.path.isdir(volume):
+                    os.rmdir(volume)
 
 
 if __name__ == "__main__":

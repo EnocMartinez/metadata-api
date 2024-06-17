@@ -297,6 +297,39 @@ __stations = {
     "required": ["shortName", "longName", "platformType", "contacts", "defaults"]
 }
 
+# Dataset splitting. For very big files daily files are envisioned, for very low-rate
+dataset_exporter_periods = [
+    "none",     # a single file for all the dataset
+    "yearly",   # a file for every year
+    "monthly",  # a file every month
+    "daily"     # a file every day
+]
+
+
+# Supported dataset formats
+dataset_exporter_formats = [
+    "netcdf",
+    "csv",
+    "zip"
+]
+
+# DataExporter Configuration
+# It includes the host where to deliver the file, and the export periodicity
+dataset_exporter_conf = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "path where the datasets will be exported"},
+        "fileTreeLevel": {
+            "type": "string", "enum": dataset_exporter_periods,
+            "description": "File tree level, from none to daily folders. Monthly or yearly is usually recommended"
+        },
+        "host": {"type": "string", "description": "host where to deliver the file"},
+        "period": {"type": "string", "enum": dataset_exporter_periods},
+        "format": {"type": "string", "enum": dataset_exporter_formats}
+    },
+    "required": ["path", "fileTreeLevel", "host", "period", "format"]
+}
+
 
 __datasets = {
     "$id": "mmm:datasets",
@@ -319,7 +352,7 @@ __datasets = {
                 "type": "string",
             }
         },
-        "constraints": { # Constraint the datset to certain conditions, such as depth and/or time
+        "constraints": {  # Constraint the datset to certain conditions, such as depth and/or time
             "type": "object",
             "properties": {
                 "timeRange": {"type": "string"}
@@ -332,9 +365,12 @@ __datasets = {
         "export": {
             "type": "object",
             "properties": {
-                "path": {"type": "string"}
+                # how to export dataset to the FileServer, where it can be directly downloaded by users and indexed
+                # in CKAN
+                "fileserver": dataset_exporter_conf,
+                "erddap": dataset_exporter_conf
             },
-            "required": ["path"]
+            "required": []
         },
         "contacts": __contacts_with_roles__(__doi_roles__),
         "funding": {
