@@ -26,9 +26,6 @@ from PIL import Image, ImageDraw
 SKIP_FILES = True
 SKIP_TIMESERIES_RAW = True
 
-
-
-
 try:
     from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data, propagate_mongodb_to_ckan, \
         CkanClient, get_station_deployments
@@ -41,7 +38,6 @@ except ModuleNotFoundError:
     # Add the parent directory to the sys.path
     sys.path.insert(0, parent_dir)
 
-    # add parent
     from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_mongodb_to_sensorthings,
                      bulk_load_data, propagate_mongodb_to_ckan, CkanClient, get_station_deployments)
     from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url
@@ -153,7 +149,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         log.info("Setup CkanClient")
         log.info("Let's do somethings quick and dirty to get the ckan_admin key")
-        os.system("docker exec ckan ckan user token add ckan_admin tk1 | tail -n 1 | sed 's/\t//g' >  ckan.key")
+        os.system("docker exec ckan-test ckan user token add ckan_admin tk1 | tail -n 1 | sed 's/\t//g' >  ckan.key")
         # If success, we should have now the API key in the ckan.key file
         with open("ckan.key") as f:
             ckan_key = f.read().strip()

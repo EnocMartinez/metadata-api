@@ -70,7 +70,7 @@ services:
 
   fileserver:
     image: nginx:1.25.3-alpine-slim
-    container_name: fileserver
+    container_name: fileserver-test
     ports:
       - 8082:80
     volumes:
@@ -81,7 +81,7 @@ services:
     container_name: erddap-mmapi-test
     image: axiom/docker-erddap:2.18
     restart: unless-stopped
-    hostname: dummy-erddap
+    hostname: erddap-test
     ports:
       - 8090:8080
     volumes:
@@ -91,7 +91,7 @@ services:
       - ./datasets:/datasets # bind mount for user data files
 
   ckan:
-    container_name: ckan
+    container_name: ckan-test
     build:
       context: ckan/
       dockerfile: Dockerfile
@@ -120,7 +120,7 @@ services:
       test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:8800"]
 
   ckan_db:
-    container_name: ckan_db
+    container_name: ckan_db_test
     build:
       context: postgresql/
     env_file:
@@ -133,14 +133,14 @@ services:
       test: ["CMD", "pg_isready", "-U", "postgres", "-d", "postgres"]
 
   solr:
-    container_name: ckan_solr
+    container_name: ckan_solr_test
     image: ckan/ckan-solr:2.10-solr9
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:8983/solr/"]
 
   redis:
-    container_name: ckan_redis
+    container_name: ckan_redis_test
     image: redis:6
     restart: unless-stopped
     healthcheck:
