@@ -39,14 +39,19 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         LoggerSuperclass.__init__(self, logger, "STA DB")
         self.info("Initialize database connector...")
         tinit = time.time()
-        if not self.check_if_table_exists("OBSERVATIONS"):
-
+        if (    # Make sure that all this tables exist
+                not self.check_if_table_exists("OBSERVATIONS")
+                or not self.check_if_table_exists("DATASTREAMS")
+                or not self.check_if_table_exists("SENSORS")
+                or not self.check_if_table_exists("FEATURES")
+                or not self.check_if_table_exists("THINGS")
+        ):
             if time.time() - tinit > timeout:
                 self.error("Timeout error, could not setup SensorThingsApiDB")
                 raise TimeoutError("Database not initialize")
             else:
                 self.info("Waiting until FROST-Server sets up...")
-                time.sleep(10)
+            time.sleep(10)
 
         self.__sensor_properties = {}
 
@@ -409,7 +414,8 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         # Update OBSERVATIONs count
         self.update_observations_id_seq()
 
-    def inject_to_inference(self, df, max_rows=10000, tmp_folder="/tmp/sta_db_copy/data", tmp_folder_db="/tmp/sta_db_copy/data"):
+    def inject_to_inference(self, df, max_rows=10000, tmp_folder="/tmp/sta_db_copy/data",
+                            tmp_folder_db="/tmp/sta_db_copy/data"):
         """
         Inject all data in df into the timeseries table via SQL copy
         """
@@ -451,21 +457,15 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         # Update OBSERVATIONs count
         self.update_observations_id_seq()
 
-    def inject_to_observations(self, df: pd.DataFrame, datastreams: dict, url: str, foi_id: int, avg_period: str,
+    def inject_to_observations(self, df: pd.DataFrame, datastreams: dict,  foi_id: int, avg_period: str,
                                max_rows=10000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data",
-                               profile=False):
+                               tmp_folder_db="/tmp/sta_db_copy/data", profile=False):
         """
         Injects all data in a dataframe using SQL copy.
         """
         init = time.time()
         os.makedirs(tmp_folder, exist_ok=True)
         os.chown(tmp_folder, os.getuid(), os.getgid())
-        if foi_id == -1:
-            # We need to insert the first row using the API, so SensorThings will automatically generate the FOI
-            rich.print("POSTing the first row to get the Feature ID")
-            # feature_id = self.post_via_api(df, api_url, df.iloc[0], column_mapper, avg_period=avg_period)
-            foi_id = self.post_via_api(df, url, df.iloc[0], datastreams, avg_period=avg_period, parameters={})
-            df = df.iloc[1:-1]
 
         rich.print("Splitting input dataframe into smaller ones")
         rows = int(max_rows / len(datastreams))
@@ -481,17 +481,13 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
             rsync_files(self.host, tmp_folder, files)
             rich.print(f"[green]done![/green] took {time.time() - t:.02f} s")
 
-        if disable_triggers:
-            self.disable_all_triggers()
-
         with Progress() as progress:
             task1 = progress.add_task("SQL COPY to OBSERVATIONS table...", total=len(dataframes))
             for file in files:
+                # convert from local to remote path
+                file = file.replace(tmp_folder, tmp_folder_db)
                 self.sql_copy_csv(file, "OBSERVATIONS")
                 progress.advance(task1, advance=1)
-
-        if disable_triggers:
-            self.enable_all_triggers()
 
         rich.print("Forcing PostgreSQL to update Observation ID...")
         self.exec_query("select setval('\"OBSERVATIONS_ID_seq\"', (select max(\"ID\") from \"OBSERVATIONS\") );")
@@ -740,6 +736,10 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 continue
             df = df_in.copy(deep=True)
             df = self.harmonize_quality_control(df)
+
+            if colname + "_QC" not in df.columns:
+                raise ValueError(f"Variable {colname} does not have QC column")
+
             keep = ["timestamp", colname, colname + "_QC"]
             df["timestamp"] = df.index.values
             df = df[keep]

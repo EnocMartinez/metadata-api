@@ -10,6 +10,7 @@ created: 21/9/23
 
 import os
 import logging
+import urllib
 from logging.handlers import TimedRotatingFileHandler
 
 import jsonschema
@@ -115,17 +116,17 @@ def file_list(dir_name) -> list:
 def dir_list(dir_name) -> list:
     """ create a list of file and sub directories names in the given directory"""
     assert os.path.isdir(dir_name), f"{dir_name} is not a directory!"
-    list_of_dirs = os.listdir(dir_name)
-    all_dirs = list()
-    for entry in list_of_dirs:
+    sublist = os.listdir(dir_name)
+    all_files = list()  # all files and folders
+    for entry in sublist:
         full_path = os.path.join(dir_name, entry)
+        all_files.append(full_path)
         if os.path.isfile(entry):
             continue
         if os.path.isdir(full_path):
-            all_dirs = all_dirs + file_list(full_path)
-            all_dirs.append(full_path)
-    all_dirs = reversed(all_dirs)
-    return all_dirs
+            all_files = all_files + dir_list(full_path)
+    all_files = list(reversed(all_files))
+    return all_files
 
 
 class LoggerSuperclass:
@@ -432,3 +433,34 @@ def validate_schema(doc: dict, schema: dict, errors: list, verbose=False) -> lis
         if verbose:
             rich.print(txt)
     return errors
+
+
+def retrieve_url(url, output="", attempts=3, timeout=5):
+    """
+    Tries to retrieve an URL and store its contents into output. It will try to get the URL for n attempts.
+    :param url:
+    :param output:
+    :param attempts:
+    :param timeout:
+    :return:
+    """
+    exc = None
+    success = False
+    while not success and attempts > 0:
+        try:
+            response = requests.get(url, timeout=timeout, stream=True)
+            success = True
+        except Exception as e:
+            exc = e
+    # Open the output file and make sure we write in binary mode
+
+    if output and success:
+        with open(output, 'wb') as fh:
+            # Walk through the request response in chunks of 1024 * 1024 bytes, so 1MiB
+            for chunk in response.iter_content(1024 * 1024):
+                fh.write(chunk)
+    elif not success:
+        raise exc
+
+
+

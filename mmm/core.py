@@ -428,11 +428,11 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
             db.inject_to_timeseries(df, datastreams, tmp_folder=tmp_folder)
 
         else:  # averaged timeseries
-            datastreams_conf = db.get_datastream_config(sensor=sensor_name, data_type=data_type, average=average)
+            datastreams_conf = db.get_datastream_config(sensor=sensor_name, data_type=data_type, average_period=average)
             datastreams = {
                 row["variable_name"]: row["datastream_id"] for _, row in datastreams_conf.iterrows()
             }
-            db.inject_to_observations(df, datastreams, url, foi_id, average)
+            db.inject_to_observations(df, datastreams, foi_id, average, tmp_folder=tmp_folder)
 
     elif data_type == "profiles":
         if not average:  # profiles with full data
@@ -446,7 +446,7 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
             datastreams = {
                 row["variable_name"]: row["datastream_id"] for _, row in datastreams_conf.iterrows()
             }
-            db.inject_to_observations(df, datastreams, url, foi_id, average, profile=True)
+            db.inject_to_observations(df, datastreams, foi_id, average, profile=True)
 
     elif data_type == "detections":
         db.inject_to_detections(df, tmp_folder=tmp_folder)

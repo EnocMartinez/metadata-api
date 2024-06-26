@@ -9,7 +9,7 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 23/3/21
 """
-
+import logging
 import os
 import shutil
 import socket
@@ -38,7 +38,7 @@ class FileServer(LoggerSuperclass):
         self.basepath = conf["basepath"]
         self.baseurl = conf["baseurl"]
 
-        if self.baseurl[-1] != "/":
+        if self.baseurl and self.baseurl[-1] != "/":
             self.baseurl += "/"
 
         if self.basepath.startswith("./"):
@@ -94,40 +94,15 @@ class FileServer(LoggerSuperclass):
         :param http_indexed: If True, the file should be http indexed, which means that should be a the base path
         :returns: URL of the files
         """
+        import rich
+        rich.print(f"[blue]Path: {path}")
         assert type(path) is str, "path must be a string!"
         assert type(file) is str, "file must be a string!"
         if not dry_run:
             assert os.path.exists(file), "file does not exist!"
 
-        if file.startswith("./"):
-            file = file[2:]
-        if path.startswith("./"):
-            path = path[2:]
+        dest_file = send_file(file, path, self.host, dry_run=dry_run)
 
-        # If we are in the 'host' machine, simply copy it
-        if is_absolute_path(path):
-            dest_file = os.path.join(path, os.path.basename(file))
-
-        else:
-            if path.startswith(self.basepath):
-                dest_file = os.path.join(path, os.path.basename(file))
-            else:
-                dest_file = os.path.join(self.basepath, path, os.path.basename(file))
-
-        if not dry_run:
-            if os.uname().nodename == self.host or self.host == "localhost":
-                self.info(f"Local copy from {file} to {dest_file}")
-                os.makedirs(os.path.dirname(dest_file), exist_ok=True)
-                shutil.copy2(file, dest_file)
-            else:
-                # Creating folder (just in case)
-                run_over_ssh(self.host, f"mkdir -p {path}", fail_exit=True)
-                # Run rsync process
-                run_subprocess(["rsync", file, f"{self.host}:{dest_file}"])
-                self.info(f"rsync from {file} to {self.host}:{dest_file}")
-        else:
-            # Dry run, do nothing
-            pass
         if indexed:
             return self.path2url(dest_file)
         return dest_file
@@ -153,3 +128,40 @@ class FileServer(LoggerSuperclass):
             self.info(f"rsync from {self.host}:{remote_file} to {local_file}")
 
         return local_file
+
+
+def send_file(src_file: str, dest_folder: str, host: str, dry_run=False) -> str:
+    """
+    Sends a file to a host. If the host is localhost the file will be simply copied, otherwise it will be sent by
+    calling rsync utility from the OS. The source is the path to the source file, while the dest is the path to
+    the destination folder. The new filname will be the basename of src_file appended to dest_folder:
+        src_file: /my/path/to/file.txt
+        dest_folder: /my/target/path
+    will produce:
+        dest_file: /my/target/path/file.txt
+
+
+    :param src_file: filename
+    :param dest_folder: destination folder
+    :param host: destination hostname
+    :param dry_run: if True, file won't be sent
+    :return: path to new file
+    """
+    # Delete leading ./
+    if src_file.startswith("./"):
+        src_file = src_file[2:]
+    if dest_folder.startswith("./"):
+        dest_folder = dest_folder[2:]
+
+    dest_file = os.path.join(dest_folder, os.path.basename(src_file))
+
+    if not dry_run:
+        if os.uname().nodename == host or host == "localhost":
+            os.makedirs(dest_folder, exist_ok=True)
+            shutil.copy2(src_file, dest_file)
+        else:
+            # Creating folder (just in case)
+            run_over_ssh(host, f"mkdir -p {dest_folder}", fail_exit=True)
+            # Run rsync process
+            run_subprocess(["rsync", src_file, f"{host}:{dest_file}"])
+    return dest_file

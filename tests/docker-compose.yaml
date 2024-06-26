@@ -88,7 +88,7 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf
 
   erddap:
-    container_name: erddap-emh-test
+    container_name: erddap-mmapi-test
     image: axiom/docker-erddap:2.18
     restart: unless-stopped
     hostname: dummy-erddap
@@ -99,7 +99,6 @@ services:
       - ./conf/setup.xml:/usr/local/tomcat/content/erddap/setup.xml
       - ./erddapData:/erddapData   # bind mount for ERDDAP internal data
       - ./datasets:/datasets # bind mount for user data files
-
 
   ckan:
     container_name: ckan

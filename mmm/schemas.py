@@ -325,9 +325,11 @@ dataset_exporter_conf = {
         },
         "host": {"type": "string", "description": "host where to deliver the file"},
         "period": {"type": "string", "enum": dataset_exporter_periods},
-        "format": {"type": "string", "enum": dataset_exporter_formats}
+        "format": {"type": "string", "enum": dataset_exporter_formats},
+        "identifier": {"type": "string",
+                       "description": "override the identifier for this service, by default use dataset's #id"},
     },
-    "required": ["path", "fileTreeLevel", "host", "period", "format"]
+    "required": ["path", "host", "period", "format"]
 }
 
 

@@ -8,6 +8,7 @@ license: MIT
 created: 27/5/24
 """
 import logging
+import shutil
 from argparse import ArgumentParser
 import unittest
 import os
@@ -21,7 +22,12 @@ import numpy as np
 import pandas as pd
 import json
 from PIL import Image, ImageDraw
-import urllib
+
+SKIP_FILES = True
+SKIP_TIMESERIES_RAW = True
+
+
+
 
 try:
     from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data, propagate_mongodb_to_ckan, \
@@ -38,7 +44,7 @@ except ModuleNotFoundError:
     # add parent
     from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_mongodb_to_sensorthings,
                      bulk_load_data, propagate_mongodb_to_ckan, CkanClient, get_station_deployments)
-    from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url
+    from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url
     from metadata_api import run_metadata_api
     from sta_timeseries import run_sta_timeseries_api
 
@@ -101,6 +107,10 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                         cls.docker_volumes.append(src)
 
         cls.local_csv_data = "/var/tmp/mmapi/tmpdata/"
+
+        # Make sure that ERDDAP has a clean datasets.xml file
+        shutil.copy2("conf/datasets.xml.default", "conf/datasets.xml" )
+
         log.info("Setting up system start docker compose... (this may take a while)")
         run_subprocess("docker compose up -d --build", fail_exit=True)
 
@@ -115,16 +125,43 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         cls.mc.drop_all()
         cls.dc.sta.drop_all()
 
-        log.info("Setup CkanClient")
+        # make sure that all servieces are up and running with at least a quick get
+        urls = {
+            "ERDDAP": "http://localhost:8090/erddap/index.html",
+            "SensorThings": "http://localhost:8080/FROST-Server/v1.1/Sensors",
+            "CKAN": "http://localhost:5001/api/3/"
+        }
+        timeout = 120
+        tinit = time.time()
+        for service, url in urls.items():
+            code = 404
+            rich.print(f"Trying to reach service [cyan]{service}[/cyan]...", end="")
+            while code > 300:
+                try:
+                    r = requests.get(url, timeout=5)
+                    code = r.status_code
+                except requests.exceptions.RequestException:
+                    pass
+                if time.time() - tinit > timeout:
+                    rich.print("[red]Timeout error!")
+                    raise TimeoutError("Could not connect to service")
 
+                if code < 300:
+                    rich.print(f"[green]success!")
+                else:
+                    time.sleep(2)
+
+        log.info("Setup CkanClient")
         log.info("Let's do somethings quick and dirty to get the ckan_admin key")
         os.system("docker exec ckan ckan user token add ckan_admin tk1 | tail -n 1 | sed 's/\t//g' >  ckan.key")
         # If success, we should have now the API key in the ckan.key file
         with open("ckan.key") as f:
             ckan_key = f.read().strip()
         os.remove("ckan.key")
-        cls.ckan = CkanClient(cls.mc, cls.conf["ckan"]["url"], ckan_key)
 
+        if len(ckan_key) < 10:
+            raise ValueError(f"CKAN TOKEN too short! '{ckan_key}'")
+        cls.ckan = CkanClient(cls.mc, cls.conf["ckan"]["url"], ckan_key)
 
     def test_01_launch_metadata_api(self):
         """Run all tests for MMAPI in a sequential manner"""
@@ -926,7 +963,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "erddap": {
                     "host": "localhost",
                     "fileTreeLevel": "monthly",
-                    "path": "./erddapData/obsea_ctd_full",
+                    "path": "./datasets/obsea_ctd_full",
                     "period": "daily",
                     "format": "netcdf"
                 },
@@ -957,7 +994,58 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "Geo-INQUIRE"
                 ]
             }
-        }
+        }  # obsea_ctd_full
+        self.mc.insert_document("datasets", d)
+
+        d = {
+            "#id": "obsea_ctd_30min",
+            "title": "CTD data at OBSEA Underwater Observatory 30 min average",
+            "summary": "CTD data measured at OBSEA underwater observatory averaged every 30min",
+            "@sensors": [
+                "SBE37",
+                "SBE16"
+            ],
+            "@stations": "OBSEA",
+            "dataType": "timeseries",
+            "dataSource": "sensorthings",
+            "dataSourceOptions": {
+                "fullData": False,
+                "averagePeriod": "30min"
+            },
+            "export": {
+                "erddap": {
+                    "host": "localhost",
+                    "path": "./datasets/obsea_ctd_full",
+                    "period": "daily",
+                    "format": "netcdf"
+                },
+                "fileserver": {
+                    "host": "localhost",
+                    "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
+                    "period": "yearly",
+                    "format": "netcdf"
+                }
+            },
+            "contacts": [
+                {
+                    "@people": "enoc_martinez",
+                    "role": "DataCurator"
+                },
+                {
+                    "@people": "enoc_martinez",
+                    "role": "ProjectLeader"
+                },
+                {
+                    "@organizations": "upc",
+                    "role": "RightsHolder"
+                }
+            ],
+            "funding": {
+                "@projects": [
+                    "Geo-INQUIRE"
+                ]
+            }
+        }  # obsea_ctd_30min
         self.mc.insert_document("datasets", d)
 
         d = {
@@ -976,14 +1064,12 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "export": {
                 "erddap": {
                     "host": "localhost",
-                    "fileTreeLevel": "monthly",
                     "path": "./erddapData/IPC608_pics",
                     "period": "daily",
                     "format": "netcdf"
                 },
                 "fileserver": {
                     "host": "localhost",
-                    "fileTreeLevel": "none",
                     "path": "/var/tmp/mmapi/volumes/files/datasets/IPC608_pics",
                     "period": "yearly",
                     "format": "zip"
@@ -1026,7 +1112,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         """Ingesting average timeseries data using the API"""
         # Generate sine wave values
         frequency = 1
-        dates = pd.date_range(start='2023-01-01', end="2023-01-02", freq='30min')
+        dates = pd.date_range(start='2024-01-01', end="2024-01-02", freq='30min')
         tvector = np.arange(0, len(dates)) / 1000
         # Create a pandas DataFrame
         df = pd.DataFrame({
@@ -1096,7 +1182,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         self.dc.sta.check_data_integrity()
 
-    def test_31_ingest_raw_timeseries_data(self):
+    def test_31_bulk_load_raw_timeseries_data(self):
         """Ingesting average timeseries data using the API"""
         # Generate sine wave values
         frequency = 1
@@ -1115,8 +1201,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         foi_id = sta.value_from_query('select "ID" from "FEATURES" limit 1;')
         filename = "test31.csv"
         df.to_csv(filename, index=False)
-        bulk_load_data(filename, self.conf["sensorthings"], self.sta_url, "SBE37", "timeseries", foi_id=foi_id,
-                       tmp_folder="./tmpdata")
+        bulk_load_data(filename, self.conf["sensorthings"], self.sta_url, "SBE37", "timeseries",
+                       foi_id=foi_id, tmp_folder="./tmpdata")
         os.remove(filename)
         self.info("Now, let's get the data and check that it's the same")
         temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries")
@@ -1135,6 +1221,58 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         first_value = data["value"][0]["result"]
         # Temperature first value is 0
         self.assertAlmostEqual(first_value, 0.0)
+        self.dc.sta.check_data_integrity()
+
+    def test_33_bulk_load_avg_timeseries_data(self):
+        """Bulk load average timeseries data"""
+        # Generate sine wave values
+        frequency = 1
+
+        tstart = "2022-01-01T00:00:00Z"
+        tend = "2022-03-31T00:00:00Z"
+
+        dates = pd.date_range(start=tstart, end=tend, freq='30min')
+        self.info(f"Bulk loading a LOT of averaged data ({len(dates)} points)")
+        tvector = np.arange(0, len(dates)) / 1000
+        # Create a pandas DataFrame
+        df = pd.DataFrame({
+            'timestamp': dates,
+            "TEMP": np.sin(2 * np.pi * frequency * tvector),
+            "CNDC": np.cos(2 * np.pi * frequency * tvector)
+        })
+        df["TEMP_QC"] = 1
+        df["CNDC_QC"] = 1
+
+        df["timestamp"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        sta = self.dc.sta
+        sta.initialize_dicts()  # update dicts
+        print(df)
+        filename = "test33.csv"
+        df.to_csv(filename, index=False)
+        foi_id = sta.value_from_query('select "ID" from "FEATURES" limit 1;')
+        bulk_load_data(filename, self.conf["sensorthings"], self.sta_url, "SBE37", "timeseries",
+                       foi_id=foi_id, tmp_folder="./tmpdata", average="30min")
+
+        os.remove(filename)
+        self.info("Now, let's get the data and check that it's the same")
+        temp_id = sta.get_datastream_id("SBE37", "OBSEA", "TEMP", "timeseries", average="30min")
+        rich.print(f"TEMP ID: {temp_id}")
+        # Now, let's download all the data that we injected, see if it's available
+        data = get_json(self.sta_ts_url + f"/Datastreams({temp_id})/Observations",
+                        params={
+                            "$top": "10000000",
+                            "$filter": f"phenomenonTime ge 2021-12-31T00:00:01Z and phenomenonTime le 2023-02-05T00:00:01Z"
+                        })
+
+        results = data["value"]
+        rich.print(f"We should have {len(df)} data opints, got {len(results)}")
+        rich.print(results[0])
+        rich.print(results[-1])
+
+        rich.print("now vector")
+        rich.print(dates[0])
+        rich.print(dates[-1])
+        self.assertEqual(len(results), len(tvector))
         self.dc.sta.check_data_integrity()
 
     def test_40_ingest_avg_profile_data(self):
@@ -1295,6 +1433,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_50_ingest_pics(self):
         """Create and ingest picture data"""
+        if SKIP_FILES:
+            return
         width, height = 2000, 2000  # Define the dimensions of the image
 
         self.log.info("Creating fake pictures...")
@@ -1337,7 +1477,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # Now download all files
         for result in results:
             print(result["result"])
-            urllib.request.urlretrieve(result["result"], "image.png")
+            retrieve_url(result["result"], output="image.png")
             os.remove("image.png")
 
         # Remove created files
@@ -1346,6 +1486,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_51_ingest_pics_inference_detections(self):
         """Creating picture for bulk load pictures, inferences and detections"""
+        if SKIP_FILES:
+            return
         width, height = 2000, 2000  # Define the dimensions of the image
 
         pictures = []
@@ -1393,8 +1535,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.assertEqual(len(results), len(pictures))
         # Now download all files
         for result in results:
-            urllib.request.urlretrieve(result["result"], "image.png")
-            os.remove("image.png")
+           retrieve_url(result["result"])
 
         # Now create inference data
         # Let's create a csv file for file bulk load
@@ -1554,19 +1695,21 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_71_generate_fileserver_datasets(self):
         """Creating a dataset"""
+        if SKIP_FILES:
+            return
         os.makedirs("datasets", exist_ok=True)
         # Export CSV
         dataset_id = "obsea_ctd_full"
         csv_dataset = self.dc.generate_dataset(dataset_id, "fileserver", "2020-01-01", "2021-01-01", fmt="csv")
-        csv_dataset.deliver("fileserver", self.dc.fileserver)
+        csv_dataset.deliver(fileserver=self.dc.fileserver)
         print(csv_dataset)
         self.assertTrue(check_url(csv_dataset.url))
+
         self.dc.upload_datafile_to_ckan(self.ckan, csv_dataset)
 
         # Export NetCDF
         nc_dataset = self.dc.generate_dataset("obsea_ctd_full", "fileserver", "2020-01-01", "2030-01-01")
-        nc_dataset.deliver("fileserver", self.dc.fileserver)
-        print(nc_dataset)
+        nc_dataset.deliver(fileserver=self.dc.fileserver)
         self.assertTrue(check_url(nc_dataset.url))
         self.dc.upload_datafile_to_ckan(self.ckan, nc_dataset)
 
@@ -1576,16 +1719,49 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-01-01", fmt="potato")
 
         zip_dataset = self.dc.generate_dataset("IPC608_pics", "fileserver", "2020-01-01", "2030-01-01")
-        zip_dataset.deliver("fileserver", self.dc.fileserver)
-        print(zip_dataset)
+        zip_dataset.deliver(self.dc.fileserver)
+
         self.assertTrue(check_url(zip_dataset.url))
         self.dc.upload_datafile_to_ckan(self.ckan, zip_dataset)
 
     def test_80_config_erddap(self):
         """creates a dataset and upload it to ERDDAP"""
-        url = self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-01-01", fmt="csv")
-        rich.print(url)
-        self.ckan.resource_create("obsea_ctd_full")
+        nc_dataset = self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-01-01")
+        nc_dataset.deliver()
+
+        # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
+        data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
+        nc_dataset.configure_erddap("conf/datasets.xml", data_path)
+        nc_dataset.reload_erddap_dataset("erddapData")
+        self.info("Wait 5 seconds for ERDDAP to reload...")
+        time.sleep(5)
+        # Now get ERDDAP data!
+        erddap_dataset = "mydataset.csv"
+        dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
+        self.info(f"Downloading dataset from erddap: {dataset_url}")
+        df = pd.read_csv(erddap_dataset)
+
+    def test_80_config_erddap_with_daily_data(self):
+        """creates a dataset with daily files and upload it to ERDDAP"""
+        nc_dataset = self.dc.generate_dataset("obsea_ctd_30min", "erddap", "2020-01-01", "2030-01-01")
+        nc_dataset.deliver()
+
+        # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
+        data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
+        nc_dataset.configure_erddap("conf/datasets.xml", data_path)
+        nc_dataset.reload_erddap_dataset("erddapData")
+
+        # Now get ERDDAP data!
+        erddap_dataset = "mydataset.csv"
+        dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
+        self.info(f"Downloading dataset from erddap: {dataset_url}")
+        retrieve_url(dataset_url, output=erddap_dataset)
+        pd.read_csv(erddap_dataset)
+
+        datasets = self.dc.generate_dataset_tree("obsea_ctd_30min", "erddap", "2022-01-01", "2022-01-01")
+        for dataset in datasets:
+            dataset.deliver()
+
 
     @classmethod
     def tearDownClass(cls):
@@ -1593,14 +1769,21 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
         if False:
             run_subprocess("docker compose down")
+            rich.print("Deleting temporal docker volumes...")
             for volume in cls.docker_volumes:
-                if not os.path.isdir(volume):
+                if os.path.isfile(volume):
                     continue  # ignore volume files
+
                 for f in file_list(volume):
                     os.remove(f)
 
-                for d in dir_list(volume):
-                    os.rmdir(d)
+                # now remove any subdirs
+                subdir_list = dir_list(volume)
+                subdir_list = list(reversed(sorted(subdir_list)))
+                for subdir in subdir_list:
+                    if os.path.isfile(subdir):
+                        raise ValueError("This should not happen!")
+                    os.rmdir(subdir)
 
             for volume in cls.docker_volumes:
                 if os.path.isdir(volume):
@@ -1608,4 +1791,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
 
 if __name__ == "__main__":
+    init = time.time()
     unittest.main(failfast=True, verbosity=1)
+    rich.print(f"Total testing time {time.time() - init:.02f} secs")

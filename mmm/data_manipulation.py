@@ -635,3 +635,77 @@ def slice_and_process(df, handler, args, frequency="M", max_workers=20, text="pr
 
     processed_df = multiprocess(arguments, handler, max_workers=max_workers, text=text)
     return merge_dataframes(processed_df)
+
+def ceil_month(t):
+    """"
+    Ceil a Timestamp to month (not implemented in pandas)
+    """
+    init_month = t.month
+    t.ceil("1D")
+    while t.month == init_month:
+        t += pd.Timedelta("1D")
+    t = t.floor("1D")
+    return t
+
+
+def ceil_year(t):
+    """"
+    Ceil a Timestamp to year (not implemented in pandas)
+    """
+    init_year = t.year
+    t.ceil("1D")
+    while t.year == init_year:
+        t += pd.Timedelta("1D")
+    t = t.floor("1D")
+    return t
+
+
+def ceil_timestamp(t: pd.Timestamp, period: str) -> pd.Timestamp:
+    """
+    Ceils a timestamp, handling day, month and year periods
+    :param period: period to split, can be 'daily', 'monthly' or 'yearly'
+    :param period: period to split, can be 'daily', 'monthly' or 'yearly'
+    """
+
+    if period == "daily":
+        t = t + pd.Timedelta("1D")
+        t = t.floor("1D")
+        return t
+    elif period == "monthly":
+        return ceil_month(t)
+    elif period == "yearly":
+        return ceil_year(t)
+    else:
+        ValueError(f"Unexpected period '{period}'")
+
+
+def calculate_time_intervals(start_time: pd.Timestamp, end_time: pd.Timestamp, period: str) -> [(pd.Timestamp, pd.Timestamp),]:
+    """
+    Splits a time range into smaller intervals according to period. It will always fit to the beginning of the next day,
+    month, day. As example period 2023-06-01T03:12:00Z/'2023-06-03T12:00:00Z separated daily will be:
+        [(2023-06-01T03:12:00Z, 2023-06-02T00:00:00Z),
+        (2023-06-02T00:00:00Z, 2023-06-03T00:00:00Z),
+        (2023-06-03T00:00:00Z, 2023-06-03T12:00:00Z)]
+
+    :param start_time: start of the interval
+    :param end_time: end of the interval
+    :param period: period to split, can be 'daily', 'monthly' or 'yearly'
+    :returns: list of tuples with (time_start, time_end)
+    """
+    assert type(start_time) is pd.Timestamp, f"expected pd.Timestamp, got {type(start_time)}"
+    assert type(end_time) is pd.Timestamp, f"expected pd.Timestamp, got {type(end_time)}"
+    assert type(period) is str, f"expected str, got {type(end_time)}"
+
+    intervals = []
+    partial_time_start = ceil_timestamp(start_time, period)
+    if partial_time_start != start_time:
+        print(f"adding {start_time} to {partial_time_start}")
+        intervals.append([start_time, partial_time_start])
+
+    while partial_time_start < end_time:
+        partial_end_time = ceil_timestamp(partial_time_start, period)
+        partial_end_time = min(partial_end_time, end_time)
+        intervals.append((partial_time_start, partial_end_time))
+        partial_time_start = partial_end_time
+
+    return intervals

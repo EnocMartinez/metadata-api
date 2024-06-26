@@ -9,12 +9,14 @@ license: MIT
 created: 30/11/22
 """
 import logging
+
+import emso_metadata_harmonizer.metadata
 import jsonschema
 import pandas as pd
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
 from .common import run_subprocess, check_url, detect_common_path, run_over_ssh, LoggerSuperclass
-from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes
+from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
 from .dataset import DataExporter
@@ -26,9 +28,9 @@ from .schemas import dataset_exporter_conf, dataset_exporter_formats
 from mmm import DatasetObject
 
 
-def init_data_collector(secrets: dict, log: logging.Logger, mc: MetadataCollector = None, sta: SensorThingsApiDB = None):
+def init_data_collector(secrets: dict, log: logging.Logger, mc: MetadataCollector = None,
+                        sta: SensorThingsApiDB = None):
     return DataCollector(secrets, log, mc=mc, sta=sta)
-
 
 
 class DataCollector(LoggerSuperclass):
@@ -36,6 +38,7 @@ class DataCollector(LoggerSuperclass):
     This class implements all methods to collect data from Databases and FileSystems, generate datasets and
     deliver them to the proper service.
     """
+
     def __init__(self, secrets: dict, log, mc: MetadataCollector = None, sta: SensorThingsApiDB = None):
         LoggerSuperclass.__init__(self, log, "DC")
         if not mc:
@@ -50,6 +53,8 @@ class DataCollector(LoggerSuperclass):
         else:
             self.sta = sta
         self.fileserver = FileServer(secrets["fileserver"], log)
+
+        self.emso = None  # by default, do not initialize emso metadata
 
     def dataset_filename(self, dataset: dict, fmt: str, tstart: pd.Timestamp, tend: pd.Timestamp,
                          tmp_folder="temp") -> str:
@@ -72,22 +77,15 @@ class DataCollector(LoggerSuperclass):
         filename = dataset_id + "_" + tstart.strftime("%Y%m%d") + "_" + tend.strftime("%Y%m%d") + extensions[fmt]
         return os.path.join(tmp_folder, filename)
 
-    def generate_dataset(self, dataset_id: str, export: str, time_start: pd.Timestamp, time_end: pd.Timestamp,
-                         fmt: str="") -> DatasetObject:
-        """
-        Generates a dataset based on its configuration stored in MongoDB
-        :param dataset_id: #id of the dataset
-        :param export: dataset_exporter_conf dict object (export configuration for one service)
-        :param time_start: dataset time start
-        :param time_end: dataset time end
-        :param format: overwrite original format (e.g. csv instead of netcdf)
-        :return: Dataset file
-        """
-        # get the dataset config
+    def generate_dataset_tree(self, dataset_id: str, service_name: str, time_start: pd.Timestamp,
+                              time_end: pd.Timestamp,
+                              fmt: str = ""):
         conf = self.mc.get_document("datasets", dataset_id)
 
-        if export not in conf["export"].keys():
-            raise ValueError(f"Dataset {conf['#id']} doesn't have export configuration for service '{export}'")
+        if service_name not in conf["export"].keys():
+            raise ValueError(f"Dataset {conf['#id']} doesn't have export configuration for service '{service_name}'")
+
+        service = conf["export"][service_name]
 
         if type(time_start) is str:
             time_start = pd.Timestamp(time_start)
@@ -106,12 +104,60 @@ class DataCollector(LoggerSuperclass):
                 time_end = ctime_end
                 rich.print(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
 
+        # Get the period
+        intervals = calculate_time_intervals(time_start, time_end, service["period"])
+        datasets = []
+        for tstart, tend in intervals:
+            try:
+                d = self.generate_dataset(dataset_id, service_name, tstart, tend, fmt=fmt)
+            except ValueError:
+                # no data found for this period
+                continue
+            datasets.append(d)
+        return datasets
+
+    def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp, time_end: pd.Timestamp,
+                         fmt: str = "") -> DatasetObject:
+        """
+        Generates a dataset based on its configuration stored in MongoDB
+        :param dataset: #id of the dataset
+        :param service_name: Name of the service that will be used to export the dataset
+        :param time_start: dataset time start
+        :param time_end: dataset time end
+        :param fmt: overwrite original format (e.g. csv instead of netcdf)
+        :return: Dataset file
+        """
+        assert type(service_name) is str, f"expected str got {type(service_name)}"
+        assert type(dataset) in [dict, str], f"expected str or dict, got {type(service_name)}"
+        # get the dataset config
+        if type(dataset) is str:
+            conf = self.mc.get_document("datasets", dataset)
+        elif type(dataset) is dict:
+            conf = dataset
+        # Convert service ID to dict
+        if service_name not in conf["export"].keys():
+            raise ValueError(f"Dataset {conf['#id']} doesn't have export configuration for service '{service_name}'")
+        service = conf["export"][service_name]
+        if type(time_start) is str:
+            time_start = pd.Timestamp(time_start)
+        if type(time_end) is str:
+            time_end = pd.Timestamp(time_end)
+        # check the dataset constraints
+        if "constraints" in conf.keys() and "timeRange" in conf["constraints"].keys():
+            ctime_start = pd.Timestamp(conf["constraints"]["timeRange"].split("/")[0])
+            ctime_end = pd.Timestamp(conf["constraints"]["timeRange"].split("/")[1])
+
+            if ctime_start > time_start:
+                time_start = ctime_start
+                rich.print(f"[yellow]WARNING: Dataset constraint Forces start time to {ctime_start}")
+            if ctime_end < time_end:
+                time_end = ctime_end
+                rich.print(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
         # Generate the dataset filename
         if not fmt:
-            fmt = conf["export"][export]["format"]
+            fmt = service["format"]
         else:
             assert fmt in dataset_exporter_formats, f"Format '{fmt}' not allowed"
-
         if fmt == "csv":
             filename = self.csv_from_sta(conf, time_start, time_end)
         elif fmt == "netcdf":
@@ -120,8 +166,7 @@ class DataCollector(LoggerSuperclass):
             filename = self.zip_from_filesystem(conf, time_start, time_end)
         else:
             raise ValueError(f"Unknown dataSource format '{fmt}'")
-
-        obj = DatasetObject(conf, filename, time_start, time_end, fmt)
+        obj = DatasetObject(conf, filename, service_name, time_start, time_end, fmt)
         return obj
 
     def dataframe_from_sta(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
@@ -146,9 +191,6 @@ class DataCollector(LoggerSuperclass):
         variables = []  # by default all variables will be used
         if "@variables" in conf.keys():
             variables = conf["@variables"]
-
-        rich.print(f"[orange1]Getting datastreams from station={station_name} sensor={sensor_name} fullData={full_data}")
-        rich.print(f"[orange1]dataType='{data_type}'")
 
         # Get the THING_ID from SensorThings based on the Station name
         thing_id = self.sta.value_from_query(
@@ -221,7 +263,8 @@ class DataCollector(LoggerSuperclass):
             df = self.sta.dataframe_from_query(q, debug=False)
             sensor_dataframes.append(df)
         df = merge_dataframes_by_columns(sensor_dataframes)
-        df = df.set_index("timestamp")
+        df = df.rename(columns={"timestamp": "TIME"})
+        df = df.set_index("TIME")
         df = df.sort_index(ascending=True)
         return df
 
@@ -244,10 +287,6 @@ class DataCollector(LoggerSuperclass):
         except KeyError:
             rich.print("[red]dataSourceOptions/fullData not found in dataset configuration!")
             raise KeyError("dataSourceOptions/fullData not found in dataset configuration!")
-
-        rich.print(
-            f"[orange1]Getting datastreams from station={station_name} and sensor={sensor_name} fullData={full_data}")
-        rich.print(f"[orange1]dataType='{data_type}'")
 
         # Get the THING_ID from SensorThings based on the Station name
         thing_id = self.sta.value_from_query(
@@ -315,46 +354,50 @@ class DataCollector(LoggerSuperclass):
             df = self.sta.dataframe_from_query(q, debug=False)
             sensor_dataframes.append(df)
         df = merge_dataframes_by_columns(sensor_dataframes)
-        df = df.set_index("timestamp")
+        df = df.rename(columns={"timestamp": "TIME"})
+        df = df.set_index("TIME")
         df = df.sort_index(ascending=True)
         return df
 
     def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp):
         """
-        Generates a NetCDF file from a SensorThings Database
+        Creates a NetCDF file according to the configuration
         :param conf:
-        :return:
+        :param time_start: time start
+        :param time_end: time end
+        :param station: to minimize query time, let the option to pass the station
+        :return: generated NetCDF filename
         """
-        rich.print("[cyan]Generating NetCDF from a SensorThings API file")
-        filename = self.dataset_filename(conf, "netcdf", time_start, time_end)
-
         station = self.mc.get_document("stations", conf["@stations"])
-
         variables = []  # by default all variables will be used
         if "@variables" in conf.keys():
             variables = conf["@variables"]
 
         dataframes = []  # list with a dataframe per variable
-        metadata = []  # list of a metadata dict per variable
+        metadata = []    # list of a metadata dict per variable
 
         for sensor_name in conf["@sensors"]:
+            self.info(f"Getting {sensor_name} data from {time_start} to {time_end}")
             sensor = self.mc.get_document("sensors", sensor_name)
             df = self.dataframe_from_sta(conf, station, sensor, time_start, time_end)
-            rich.print(f"[cyan]{sensor_name} data from {time_start} to {time_end}")
             dataframes.append(df)
+            # Get the real time start/time end
             m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
             metadata.append(m)
 
-        call_dataset_generator(dataframes, metadata, output=filename)
+        if all([df.empty for df in dataframes]):
+            self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skpping")
+            raise ValueError("No data")
+
+        filename = self.dataset_filename(conf, "netcdf", time_start, time_end)
+        filename = self.call_dataset_generator(dataframes, metadata, output=filename)
         return filename
 
     def csv_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp):
         """
         Generates a CSV file from a SensorThings Database
         """
-        rich.print("[cyan]Generating CSV from a SensorThings API file")
         filename = self.dataset_filename(conf, "csv", time_start, time_end)
-
         station = self.mc.get_document("stations", conf["@stations"])
         dataframes = []  # list with a dataframe per variable
 
@@ -363,9 +406,8 @@ class DataCollector(LoggerSuperclass):
             df = self.dataframe_from_sta(conf, station, sensor, time_start, time_end)
             if len(conf["@sensors"]) > 1:
                 df["SENSOR_ID"] = sensor_name
-
-            rich.print(f"[cyan]{sensor_name} data from {time_start} to {time_end}")
             dataframes.append(df)
+
         df = merge_dataframes(dataframes)
         df.to_csv(filename)
         return filename
@@ -470,7 +512,7 @@ class DataCollector(LoggerSuperclass):
 
     def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list,
                                  default_data_mode="real-time", os_data_type="OceanSITES time-series data",
-                                 tstart="", tend="") -> dict:
+                                 tstart: str = "", tend: str = "") -> dict:
         """
         This method returns the configuration required by the Metadata Harmonizer tool from the MongoDB
         :param dataset: sensor dict from MongoDB database
@@ -497,16 +539,6 @@ class DataCollector(LoggerSuperclass):
         for c in dataset["contacts"]:
             role = c["role"]
             if "@organizations" in c.keys():
-                rich.print(f"[yellow]WARNING: skipping institution '{c['@organizations']}'")
-                continue
-            name = self.mc.get_document("people", c["@people"])["name"]
-            people.append(name)
-            roles.append(role)
-
-        for c in dataset["contacts"]:
-            role = c["role"]
-            if "@organizations" in c.keys():
-                rich.print(f"[yellow]WARNING: skipping institution '{c['@organizations']}'")
                 continue
             name = self.mc.get_document("people", c["@people"])["name"]
             people.append(name)
@@ -616,34 +648,17 @@ class DataCollector(LoggerSuperclass):
             format=dataset.fmt,
             resource_url=dataset.url)
 
-
-def call_dataset_generator(dataframes: list, metadata: list, output="output.nc"):
-    """
-    Dump dataframes and metadata to temporal files and calls the datasets generator
-    :param dataframes:
-    :param metadata:
-    :param output:
-    :return:
-    """
-    assert (len(dataframes) == len(metadata))
-
-    csv_files = []
-    meta_files = []
-    for i in range(len(dataframes)):
-        csv_name = f".data_{i}.csv"
-        meta_name = f".meta_{i}.min.json"
-        csv_files.append(csv_name)
-        meta_files.append(meta_name)
-
-        dataframes[i].to_csv(csv_name)
-        with open(meta_name, "w") as f:
-            json.dump(metadata[i], f, indent=2)
-
-    mh.generate_dataset(csv_files, meta_files, output=output)
-
-    for d in csv_files:
-        os.remove(d)
-    for m in meta_files:
-        os.remove(m)
-
-
+    def call_dataset_generator(self, dataframes: list, metadata: list, output="output.nc"):
+        """
+        Dump dataframes and metadata to temporal files and calls the datasets generator
+        :param dataframes:
+        :param metadata:
+        :param output:
+        :return:
+        """
+        assert (len(dataframes) == len(metadata))
+        if not self.emso:
+            self.emso = emso_metadata_harmonizer.metadata.EmsoMetadata()
+        dataframes = [df.reset_index() for df in dataframes]
+        mh.generate_dataset(dataframes, metadata, output=output, emso_metadata=self.emso)
+        return output

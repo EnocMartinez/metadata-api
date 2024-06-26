@@ -329,7 +329,6 @@ class MetadataCollector:
         doc = self.__get_from_cache(collection, document_id)
         if doc:  # if not None, we have it on cache, return it
             self.used_time += time.time() - t
-            rich.print(f"[magenta]MongoDB get {document_id} form {collection}, total  time {self.used_time}")
             return doc
 
         if version:
@@ -358,7 +357,6 @@ class MetadataCollector:
         # Adding document to the cache
         self.__add_to_cache(collection, doc)
         self.used_time += time.time() - t
-        rich.print(f"[magenta]MongoDB get {document_id} form {collection}, total  time {self.used_time}")
         return doc
 
     def get_document_history(self, collection, document_id):
