@@ -8,6 +8,7 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 30/11/22
 """
+import time
 
 from pymongo import MongoClient
 import datetime
@@ -125,6 +126,46 @@ class MetadataCollector:
 
         self.metadata_schema = mmm_metadata  # JSON schema for
         self.schemas = mmm_schemas
+
+        # The cache stores in memory documents already retrieved from the database, this will significantly speed up
+        # the system and reduce the database workload
+        self.__cache_timeout_s = 300  # 5 minutes
+        self.__cache = {}
+
+        self.used_time = 0
+
+    def __add_to_cache(self, collection, doc):
+        """
+        Adds a document to the cache
+        :param collection:  collection
+        :param doc: document to add
+        :return:
+        """
+        doc_id = doc["#id"]
+        if collection not in self.__cache.keys():
+            self.__cache[collection] = {}
+
+        self.__cache[collection][doc_id] = (time.time(), doc)
+
+    def __get_from_cache(self, collection, doc_id):
+        """
+        Get a document from the cache
+        :param collection:
+        :param doc:
+        :return: the document or None if the document is not on the cache (or timeout has expired)
+        """
+        if collection not in self.__cache.keys():
+            return None  # Collection not found
+        elif doc_id not in self.__cache[collection].keys():
+            return None  # Document not found
+        # get the document
+        timestamp, doc = self.__cache[collection][doc_id]
+        # check the timeout condition
+        if time.time() - timestamp > self.__cache_timeout_s:
+            del self.__cache[collection][doc_id]
+            return None
+        return doc
+
 
     def __ensure_ids(self):
         """
@@ -283,6 +324,14 @@ class MetadataCollector:
         :param document_id: id of the document
         :param version: version (int)
         """
+        t = time.time()
+        # First check if the doc is in the cache
+        doc = self.__get_from_cache(collection, document_id)
+        if doc:  # if not None, we have it on cache, return it
+            self.used_time += time.time() - t
+            rich.print(f"[magenta]MongoDB get {document_id} form {collection}, total  time {self.used_time}")
+            return doc
+
         if version:
             db = self.db_history
             rich.print("[purple]Using historical database")
@@ -305,7 +354,12 @@ class MetadataCollector:
         elif len(documents) == 0:
             raise LookupError(f"Element {collection} with   with #id = '{document_id}' not found")
 
-        return strip_mongo_ids(documents[0])
+        doc = strip_mongo_ids(documents[0])
+        # Adding document to the cache
+        self.__add_to_cache(collection, doc)
+        self.used_time += time.time() - t
+        rich.print(f"[magenta]MongoDB get {document_id} form {collection}, total  time {self.used_time}")
+        return doc
 
     def get_document_history(self, collection, document_id):
         """
@@ -519,7 +573,6 @@ class MetadataCollector:
                 if "@people" in contact.keys():
                     return self.get_document("people", contact["@people"]), "people"
                 elif "@organizations" in contact.keys():
-                    rich.print(f"Getting organization {contact['@organizations']}")
                     return self.get_document("organizations", contact["@organizations"]), "organizations"
                 else:
                     raise ValueError("Contact type not valid!")
