@@ -146,3 +146,13 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "-e", "QUIT"]
 
+  pgadmin:
+    image: dpage/pgadmin4:7.8
+    container_name: pgadmin-test
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=superpass
+      - PGADMIN_DISABLE_POSTFIX=true
+    ports:
+      - 8888:80
+

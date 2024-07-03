@@ -452,6 +452,7 @@ def retrieve_url(url, output="", attempts=3, timeout=5):
             success = True
         except Exception as e:
             exc = e
+            attempts -= 1
     # Open the output file and make sure we write in binary mode
 
     if output and success:
@@ -460,6 +461,7 @@ def retrieve_url(url, output="", attempts=3, timeout=5):
             for chunk in response.iter_content(1024 * 1024):
                 fh.write(chunk)
     elif not success:
+        rich.print(f"[red]Could not retrieve URL {url}")
         raise exc
 
 

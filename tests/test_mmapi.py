@@ -23,9 +23,6 @@ import pandas as pd
 import json
 from PIL import Image, ImageDraw
 
-SKIP_FILES = True
-SKIP_TIMESERIES_RAW = True
-
 try:
     from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data, propagate_mongodb_to_ckan, \
         CkanClient, get_station_deployments
@@ -63,6 +60,7 @@ def post_json(url, data):
 class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     @classmethod
     def setUpClass(cls):
+
         cls.secrets = "secrets-test.yaml"
         with open(cls.secrets) as f:
             conf = yaml.safe_load(f)["secrets"]
@@ -1429,8 +1427,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_50_ingest_pics(self):
         """Create and ingest picture data"""
-        if SKIP_FILES:
-            return
+
         width, height = 2000, 2000  # Define the dimensions of the image
 
         self.log.info("Creating fake pictures...")
@@ -1473,7 +1470,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         # Now download all files
         for result in results:
             print(result["result"])
-            retrieve_url(result["result"], output="image.png")
+            retrieve_url(result["result"], output="image.png", timeout=1, attempts=1)
             os.remove("image.png")
 
         # Remove created files
@@ -1482,8 +1479,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_51_ingest_pics_inference_detections(self):
         """Creating picture for bulk load pictures, inferences and detections"""
-        if SKIP_FILES:
-            return
         width, height = 2000, 2000  # Define the dimensions of the image
 
         pictures = []
@@ -1691,8 +1686,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_71_generate_fileserver_datasets(self):
         """Creating a dataset"""
-        if SKIP_FILES:
-            return
         os.makedirs("datasets", exist_ok=True)
         # Export CSV
         dataset_id = "obsea_ctd_full"
@@ -1763,27 +1756,26 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     def tearDownClass(cls):
         cls.log.info("stopping containers")
 
-        if False:
-            run_subprocess("docker compose down")
-            rich.print("Deleting temporal docker volumes...")
-            for volume in cls.docker_volumes:
-                if os.path.isfile(volume):
-                    continue  # ignore volume files
+        run_subprocess("docker compose down")
+        rich.print("Deleting temporal docker volumes...")
+        for volume in cls.docker_volumes:
+            if os.path.isfile(volume):
+                continue  # ignore volume files
 
-                for f in file_list(volume):
-                    os.remove(f)
+            for f in file_list(volume):
+                os.remove(f)
 
-                # now remove any subdirs
-                subdir_list = dir_list(volume)
-                subdir_list = list(reversed(sorted(subdir_list)))
-                for subdir in subdir_list:
-                    if os.path.isfile(subdir):
-                        raise ValueError("This should not happen!")
-                    os.rmdir(subdir)
+            # now remove any subdirs
+            subdir_list = dir_list(volume)
+            subdir_list = list(reversed(sorted(subdir_list)))
+            for subdir in subdir_list:
+                if os.path.isfile(subdir):
+                    raise ValueError("This should not happen!")
+                os.rmdir(subdir)
 
-            for volume in cls.docker_volumes:
-                if os.path.isdir(volume):
-                    os.rmdir(volume)
+        for volume in cls.docker_volumes:
+            if os.path.isdir(volume):
+                os.rmdir(volume)
 
 
 if __name__ == "__main__":

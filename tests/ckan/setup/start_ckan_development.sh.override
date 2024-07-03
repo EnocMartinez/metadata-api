@@ -82,7 +82,7 @@ ckan config-tool $CKAN_INI "ckan.datapusher.api_token=$(ckan -c $CKAN_INI user t
 # Run any startup scripts provided by images extending this one
 if [[ -d "/docker-entrypoint.d" ]]
 then
-    for f in /docker-entrypoint.d/*; do
+    for f in /build-entrypoint.d/*; do
         case "$f" in
             *.sh)     echo "$0: Running init file $f"; . "$f" ;;
             *.py)     echo "$0: Running init file $f"; python3 "$f"; echo ;;

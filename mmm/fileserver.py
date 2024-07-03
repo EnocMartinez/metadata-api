@@ -71,7 +71,7 @@ class FileServer(LoggerSuperclass):
             if link in path:
                 path = path.replace(link, self.basepath)
         if self.basepath not in path:
-            raise ValueError(f"basepath {self.basepath} not found in path:'{path}'")
+            raise ValueError(f" can't create URL, basepath {self.basepath} not found in path:'{path}'")
 
         url = path.replace(self.basepath, self.baseurl)
 
@@ -88,18 +88,22 @@ class FileServer(LoggerSuperclass):
 
     def send_file(self, path: str, file: str, dry_run=False, indexed=True):
         """
-        Sends a file to the FileServer
+        Sends a file to the FileServer. If the path is absolute the file will be sent there. If the path is relative,
+        the path will be appended to the basepath /basepath/path/file.
+
+
         :param path: path to deliver the file
         :param file: filename
-        :param http_indexed: If True, the file should be http indexed, which means that should be a the base path
+        :param indexed: If True, the file should be http indexed, the http link will be returned
         :returns: URL of the files
         """
-        import rich
-        rich.print(f"[blue]Path: {path}")
         assert type(path) is str, "path must be a string!"
         assert type(file) is str, "file must be a string!"
         if not dry_run:
             assert os.path.exists(file), "file does not exist!"
+
+        if not is_absolute_path(path):  # add basepath to the relative path
+            path = os.path.join(self.basepath, path)
 
         dest_file = send_file(file, path, self.host, dry_run=dry_run)
 
