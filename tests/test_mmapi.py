@@ -1096,7 +1096,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_21_launch_sta_timeseries(self):
         """launching sensorthings timeseries API"""
-        mapi = Thread(target=run_sta_timeseries_api, args=["sta-timeseries.env", self.log], daemon=True)
+        mapi = Thread(target=run_sta_timeseries_api, args=["sta-timeseries.env", self.log, 8081], daemon=True)
         mapi.start()
         time.sleep(0.5)
         d = get_json(self.sta_ts_url)

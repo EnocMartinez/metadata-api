@@ -36,11 +36,40 @@ import rich
 from mmm import SensorThingsApiDB, init_metadata_collector_env
 import datetime
 import psycopg2
+from functools import wraps  # Import wraps here
 
 app = Flask("SensorThings TimeSeries")
 CORS(app)
 
 basic_auth = BasicAuth(app)
+
+
+def determine_auth_requirement():
+    """
+    :return: True/False
+    """
+    if app.sta_auth:
+        return True
+    return False
+
+def conditional_basicauth():
+    """
+    Defines a conditional way to dynamically request BasicAuth
+    :return:
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            # Assume there's a function that determines if auth should be enabled
+            enable_auth = determine_auth_requirement()
+            if enable_auth:
+                return basic_auth.required(f)(*args, **kwargs)
+            else:
+                return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
+
 
 
 def get_datastream_id(datastream: dict):
@@ -50,7 +79,7 @@ def get_datastream_id(datastream: dict):
     if "@iot.id" in datastream.keys():
         return datastream["@iot.id"]
     elif "name" in datastream.keys():
-        return  app.db.datastreams_ids[datastream["name"]]
+        return app.db.datastreams_ids[datastream["name"]]
     else:
         raise ValueError("Can't get DatastreamID for this query, no iot.id nor name!")
 
@@ -225,7 +254,7 @@ def decode_expand_options(expand_string: str):
 def get_sta_request(request):
     sta_url = f"{app.sta_base_url}{request.full_path}"
     app.log.debug(f"Generic query, fetching {sta_url}")
-    resp = requests.get(sta_url)
+    resp = requests.get(sta_url, auth=app.sta_auth)
     rich.print(f"[yellow]Getting STA: {sta_url}")
     code = resp.status_code
     text = resp.text.replace(app.sta_base_url, app.service_url)  # hide original URL
@@ -235,7 +264,7 @@ def get_sta_request(request):
 def post_sta_request(request):
     sta_url = f"{app.sta_base_url}{request.full_path}"
     app.log.debug(f"[cyan]Generic query, fetching {sta_url}")
-    resp = requests.post(sta_url, request.data, headers=request.headers)
+    resp = requests.post(sta_url, request.data, headers=request.headers, auth=app.sta_auth)
     code = resp.status_code
     text = resp.text.replace(app.sta_base_url, app.service_url)  # hide original URL
     return text, code
@@ -461,13 +490,20 @@ def generate_response(text, status=200, mimetype="application/json", headers={})
 
 
 @app.route('/<path:path>', methods=['GET'])
+@conditional_basicauth()
 def generic_query(path):
     text, code = get_sta_request(request)
-    resp = json.loads(text)
-    return process_sensorthings_response(request, resp)
+    if code > 300:
+        if "favicon.ico" not in request.full_path:  # ignore favicon errors
+            app.log.error(f"ERROR! in request '{request}' HTTP code '{code}' response '{text}'")
+        return Response(text, code)
+    else:
+        resp = json.loads(text)
+        return process_sensorthings_response(request, resp)
 
 
 @app.route('/', methods=['GET'])
+@conditional_basicauth()
 def generic():
     rich.print("[purple]Regular query, forward to SensorThings API")
     text, code = get_sta_request(request)
@@ -476,6 +512,7 @@ def generic():
 
 
 @app.route('/Observations(<int:observation_id>)', methods=['GET'])
+@conditional_basicauth()
 def get_observation(observation_id):
     """
     Observations
@@ -505,6 +542,7 @@ def get_observation(observation_id):
 
 
 @app.route('/Observations', methods=['GET'])
+@conditional_basicauth()
 def get_observations():
     """
     Get generic Observations. Probably filtered by datastream, so we need to check the filter
@@ -544,11 +582,13 @@ def get_observations():
 
 
 @app.route('/Sensors(<int:sensor_id>)/Datastreams(<int:datastream_id>)/Observations', methods=['GET'])
+@conditional_basicauth()
 def sensors_datastreams_observations(sensor_id, datastream_id):
     return datastreams_observations_get(datastream_id)
 
 
 @app.route('/Datastreams(<int:datastream_id>)', methods=['GET'])
+@conditional_basicauth()
 def just_datastreams(datastream_id):
     rich.print(f"[green]Got a datastream request: {request.path}")
     text, code = get_sta_request(request)
@@ -557,6 +597,7 @@ def just_datastreams(datastream_id):
 
 
 @app.route('/Datastreams(<int:datastream_id>)/Observations', methods=['GET'])
+@conditional_basicauth()
 def datastreams_observations_get(datastream_id, opts=None):
     try:
         if not opts:
@@ -777,10 +818,10 @@ def add_cors_headers(response):
     return response
 
 
-def run_sta_timeseries_api(env_file="", log=None):
+def run_sta_timeseries_api(env_file="", log=None, port=5000):
     if not log:
         log = setup_log("STA-TS")
-
+    log.setLevel(logging.DEBUG)
     app.log = LoggerSuperclass(log, "STA-TS", colour=CYN)
 
     if env_file:
@@ -790,7 +831,7 @@ def run_sta_timeseries_api(env_file="", log=None):
         environ = os.environ
 
     required_env_variables = ["STA_DB_HOST", "STA_DB_USER", "STA_DB_PORT", "STA_DB_PASSWORD", "STA_DB_NAME", "STA_URL",
-                              "STA_TS_ROOT_URL", "STA_TS_USER", "STA_TS_PASSWORD"]
+                              "STA_TS_ROOT_URL", "STA_TS_USER", "STA_TS_PASSWORD", "STA_DB_BASICAUTH"]
 
     for key in required_env_variables:
         if key not in os.environ.keys():
@@ -804,11 +845,12 @@ def run_sta_timeseries_api(env_file="", log=None):
     app.service_url = environ["STA_TS_ROOT_URL"]
     app.sta_base_url = environ["STA_URL"]
 
-    # Get the port from the URL
-    try:
-        port = int(app.service_url.split(":")[2].split("/")[0])
-    except IndexError:
-        port = 80
+    if environ["STA_DB_BASICAUTH"].lower() == "true":
+        app.sta_auth = (environ["STA_TS_USER"], environ["STA_TS_PASSWORD"])
+    elif environ["STA_DB_BASICAUTH"].lower() == "false":
+        app.sta_auth = ()
+    else:
+        raise ValueError(f"Expected true or false, got {environ['STA_DB_BASICAUTH']}")
 
     app.config['BASIC_AUTH_USERNAME'] = os.environ["STA_TS_USER"]
     app.config['BASIC_AUTH_PASSWORD'] = os.environ["STA_TS_PASSWORD"]
