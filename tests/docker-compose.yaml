@@ -1,0 +1,158 @@
+services:
+#------------------------------------------------#
+# FROST-Server
+#------------------------------------------------#
+  sta:
+    image: fraunhoferiosb/frost-server:latest
+    container_name: sta-test
+    depends_on:
+      sta_db:
+        condition: service_healthy
+    environment:
+      - persistence_db_username=sensorthings
+      - persistence_db_password=ChangeMe
+      - serviceRootUrl=http://localhost:8080/FROST-Server
+      - persistence_db_url=jdbc:postgresql://sta_db:5432/sensorthings
+      - maxTop=100000
+      - http_cors_enable=true
+      - http_cors_allowed.origins=*
+      - persistence_db_driver=org.postgresql.Driver
+      - persistence_autoUpdateDatabase=true
+      - maxDataSize=50000000 # default is 25 MB, upgraded to 50
+      - enableMultiDatastream=false
+      - enableActuation=false
+      - bus_workerPoolSize=50  ## max 50 threads
+      - bus_queueSize=10000000  # 10 MB (default is unknown)
+      - mqtt_Enabled=false
+    ports:
+      - 8080:8080
+
+#------------------------------------------------#
+# SensorThings Database from TimscaleDB HA image
+#------------------------------------------------#
+  sta_db:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    image: postgres_postgis_timescaledb:local
+    container_name: sta-db-test
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=DifferentPwd
+      - sta_db_user=sensorthings
+      - sta_db_name=sensorthings
+      - sta_db_password=ChangeMe
+    ports:
+      - 5432:5432
+    volumes:
+      - ./tmpdata:/tmp/sta_db_copy/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready", "-d", "sensorthings" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 120s
+
+  mmapi-db:
+    image: mongodb/mongodb-community-server:7.0.1-ubuntu2204
+    container_name: mmapi-db-test
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGODB_INITDB_ROOT_USERNAME=testuser
+      - MONGODB_INITDB_ROOT_PASSWORD=complexpassword
+      - mmapi_connection="mongodb://testuser:complexpassword@mmapi-db:27017"
+      - mmapi_database="metadata"
+      - mmapi_default_author="enoc_martinez"
+      - mmapi_organization="UPC"
+      - mmapi_port=5000
+
+  fileserver:
+    image: nginx:1.25.3-alpine-slim
+    container_name: fileserver-test
+    ports:
+      - 8882:80
+    volumes:
+      - /var/tmp/mmapi/volumes/files:/data/files:ro
+      - ./nginx.conf:/etc/nginx/nginx.conf
+
+  erddap:
+    container_name: erddap-mmapi-test
+    image: axiom/docker-erddap:2.18
+    restart: unless-stopped
+    hostname: erddap-test
+    ports:
+      - 8090:8080
+    volumes:
+      - ./conf/datasets.xml:/usr/local/tomcat/content/erddap/datasets.xml
+      - ./conf/setup.xml:/usr/local/tomcat/content/erddap/setup.xml
+      - ./erddapData:/erddapData   # bind mount for ERDDAP internal data
+      - ./datasets:/datasets # bind mount for user data files
+
+  ckan:
+    container_name: ckan-test
+    build:
+      context: ckan/
+      dockerfile: Dockerfile
+      args:
+        - TZ=UTC
+    ports:
+      - "5001:5000"
+    env_file:
+      - ./ckan.env
+    depends_on:
+      ckan_db:
+        condition: service_healthy
+      solr:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:5000"]
+
+  datapusher:
+    container_name: ckan_datapusher
+    image: ckan/ckan-base-datapusher:0.0.20
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:8800"]
+
+  ckan_db:
+    container_name: ckan_db_test
+    build:
+      context: postgresql/
+    env_file:
+      - ./ckan.env
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "postgres"]
+
+  solr:
+    container_name: ckan_solr_test
+    image: ckan/ckan-solr:2.10-solr9
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:8983/solr/"]
+
+  redis:
+    container_name: ckan_redis_test
+    image: redis:6
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-e", "QUIT"]
+
+  pgadmin:
+    image: dpage/pgadmin4:7.8
+    container_name: pgadmin-test
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@admin.com
+      - PGADMIN_DEFAULT_PASSWORD=superpass
+      - PGADMIN_DISABLE_POSTFIX=true
+    ports:
+      - 8888:80
+

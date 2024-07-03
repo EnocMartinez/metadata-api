@@ -1,8 +1,14 @@
+secrets.txt
+secrets*.yaml
+log/
+MongoData
+*.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-
+**/*.xml
 # C extensions
 *.so
 
