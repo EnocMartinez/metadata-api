@@ -10,7 +10,7 @@ This API is heavily influenced by the SensorThings API, but has some major diffe
 - Every document is versioned and stored, so the whole lifecycle of a document can be retrieved.
 
 
-## Metadata API Data Types##
+## Metadata API Data Types ##
 | data type  | description                                           | data model                         | full data stored in     | averaged data stored in |
 |------------|-------------------------------------------------------|------------------------------------|-------------------------|-------------------------|
 | timeseries | fixed-point timeseries data                           | time, value(float)                 | `timeseries` hypertable | `OBSERVATIONS` table    |
@@ -62,7 +62,7 @@ Features Of Interest (FOIs) are matched to Stations (Things). So every station m
 ### Contact info ###
 
 * **author**: Enoc Martínez  
-* **version**: 0.0.1  
+* **version**: 0.0.2  
 * **organization**: Universitat Politècnica de Catalunya (UPC)  
 * **contact**: enoc.martinez@upc.edu  
 

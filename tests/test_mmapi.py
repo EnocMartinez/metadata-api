@@ -38,7 +38,7 @@ except ModuleNotFoundError:
     from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_mongodb_to_sensorthings,
                      bulk_load_data, propagate_mongodb_to_ckan, CkanClient, get_station_deployments)
     from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url
-    from metadata_api import run_metadata_api
+    from mmapi import run_metadata_api
     from sta_timeseries import run_sta_timeseries_api
 
 
