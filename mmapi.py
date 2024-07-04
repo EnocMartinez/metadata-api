@@ -18,30 +18,28 @@ from mmm import MetadataCollector, init_metadata_collector_env, init_metadata_co
 from mmm.common import setup_log
 from mmm.schemas import mmm_schemas
 import json
+import os
 
 app = Flask(__name__)
 CORS(app)
 
 
-def run_metadata_api(secrets, environment, log, mc):
-    if environment:
-        mc = init_metadata_collector_env()
-        import os
-        root_url = os.environ["mmapi_root_url"]
-        port = os.environ["mmapi_port"]
-    elif secrets:
+def run_metadata_api(secrets: str|dict,  log, mc):
+    if type(secrets) is dict:
+        pass
+    elif type(secrets) is str:
+        if not os.path.exists(secrets):
+            raise FileNotFoundError(f"Could not find config file '{secrets}'")
+
         with open(secrets) as f:
             secrets = yaml.safe_load(f)["secrets"]
-            root_url = secrets["mmapi"]["root_url"]
-            port = secrets["mmapi"]["port"]
-    else:
-        raise ValueError("Metadata API needs to be configured using environment variables or yaml file!")
 
     app.log = log
     app.log.info("starting Metadata API")
     # embed MetadataCollector to app
     app.mc = mc
-    app.mmapi_url = root_url
+    app.mmapi_url = secrets["mmapi"]["root_url"]
+    port = secrets["mmapi"]["port"]
     app.run(host="0.0.0.0", port=port, debug=False)
     return app
 
@@ -59,14 +57,13 @@ def root():
     })
 
 
-@app.route('/v1.0', methods=['GET'])
-@app.route('/v1.0/', methods=['GET'])
+@app.route('/mmapi/v1.0/', methods=['GET'])
 def default_index():
-    d = {c: f"{app.mmapi_url}/v1.0/{c}" for c in app.mc.collection_names}
+    d = {c: f"{app.mmapi_url}/mmapi/v1.0/{c}" for c in app.mc.collection_names}
     return Response(json.dumps(d), status=200, mimetype="application/json")
 
 
-@app.route('/v1.0/<path:collection>', methods=['GET'])
+@app.route('/mmapi/v1.0/<path:collection>', methods=['GET'])
 def get_collection(collection: str):
     try:
         documents = app.mc.get_documents(collection)
@@ -75,7 +72,7 @@ def get_collection(collection: str):
     return Response(json.dumps(documents), status=200, mimetype="application/json")
 
 
-@app.route('/v1.0/<path:collection>', methods=['POST'])
+@app.route('/mmapi/v1.0/<path:collection>', methods=['POST'])
 def post_to_collection(collection: str):
     document = json.loads(request.data)
     app.log.debug(f"Checking if collection {collection} exists...")
@@ -99,7 +96,7 @@ def post_to_collection(collection: str):
     return Response(json.dumps(inserted_document), status=200, mimetype="application/json")
 
 
-@app.route('/v1.0/<path:collection>/<path:document_id>', methods=['PUT'])
+@app.route('/mmapi/v1.0/<path:collection>/<path:document_id>', methods=['PUT'])
 def put_to_collection(collection: str, document_id: str):
     document = json.loads(request.data)
     app.log.debug(f"Checking if collection {collection} exists...")
@@ -125,7 +122,7 @@ def put_to_collection(collection: str, document_id: str):
     return Response(json.dumps(inserted_document), status=200, mimetype="application/json")
 
 
-@app.route('/v1.0/<path:collection>/<path:identifier>', methods=['GET'])
+@app.route('/mmapi/v1.0/<path:collection>/<path:identifier>', methods=['GET'])
 def get_by_id(collection: str, identifier: str):
     if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
@@ -141,7 +138,7 @@ def get_by_id(collection: str, identifier: str):
     return Response(json.dumps(document), status=200, mimetype="application/json")
 
 
-@app.route('/v1.0/schemas/<path:collection>', methods=['GET'])
+@app.route('/mmapi/v1.0/schemas/<path:collection>', methods=['GET'])
 def get_schema(collection: str):
     if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
@@ -152,7 +149,7 @@ def get_schema(collection: str):
     return Response(json.dumps(schema), status=200, mimetype="application/json")
 
 
-@app.route('/v1.0/<path:collection>/<path:identifier>/history', methods=['GET'])
+@app.route('/mmapi/v1.0/<path:collection>/<path:identifier>/history', methods=['GET'])
 def get_document_history(collection: str, identifier: str):
     if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
@@ -167,7 +164,7 @@ def get_document_history(collection: str, identifier: str):
     return Response(json.dumps(documents), status=200, mimetype="application/json")
 
 
-@app.route('/v1.0/<path:collection>/<path:identifier>/history/<path:version>', methods=['GET'])
+@app.route('/mmapi/v1.0/<path:collection>/<path:identifier>/history/<path:version>', methods=['GET'])
 def get_history_by_id(collection: str, identifier: str, version: int):
     if collection not in app.mc.collection_names:
         error_msg = f"Collection not '{collection}', valid collection names {mc.collection_names}"
@@ -183,7 +180,7 @@ def get_history_by_id(collection: str, identifier: str, version: int):
     return Response(json.dumps(document), status=200, mimetype="application/json")
 
 
-@app.route('/v1.0/projects_timeline', methods=['GET'])
+@app.route('/mmapi/v1.0/projects_timeline', methods=['GET'])
 def project_timeline():
     """
     Returns a time-series (grafana-like format) with all active projects and their respective months number.
@@ -239,8 +236,7 @@ def project_timeline():
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
-    argparser.add_argument("-e", "--environment", action="store_true", help="Initialize from environment variables")
-    argparser.add_argument("-s", "--secrets", help="Initialize from secrets yaml file", type=str, default="")
+    argparser.add_argument("secrets", help="Initialize from secrets yaml file", type=str, default="")
     args = argparser.parse_args()
 
     with open(args.secrets) as f:
@@ -251,4 +247,4 @@ if __name__ == "__main__":
     mc = init_metadata_collector(secrets)
     log = setup_log("Metadata API")
 
-    run_metadata_api(secrets, args.environment, log, mc, thread=True)
+    run_metadata_api(secrets,  log, mc)

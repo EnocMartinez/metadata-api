@@ -72,7 +72,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         with open(cls.secrets) as f:
             cls.conf = yaml.safe_load(f)["secrets"]
 
-        cls.mmapi_url = cls.conf["mmapi"]["root_url"] + "/v1.0"
+        cls.mmapi_url = cls.conf["mmapi"]["root_url"] + "/mmapi/v1.0"
         cls.sta_url = cls.conf["sensorthings"]["url"]
 
         with open("sta-timeseries.env") as f:
@@ -161,7 +161,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         """Run all tests for MMAPI in a sequential manner"""
         self.log.info("Launching Metadata API in a dedicate thread...")
         #     run_flask_app(secrets, args.environment, log, mc, thread=True)
-        mapi = Thread(target=run_metadata_api, args=(self.secrets, None, self.log, self.mc), daemon=True)
+        mapi = Thread(target=run_metadata_api, args=(self.secrets, self.log, self.mc), daemon=True)
         mapi.start()
         time.sleep(0.5)
         d = get_json(self.mmapi_url)

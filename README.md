@@ -62,7 +62,7 @@ Features Of Interest (FOIs) are matched to Stations (Things). So every station m
 ### Contact info ###
 
 * **author**: Enoc Martínez  
-* **version**: 0.0.2  
+* **version**: 0.0.3
 * **organization**: Universitat Politècnica de Catalunya (UPC)  
 * **contact**: enoc.martinez@upc.edu  
 

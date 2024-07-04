@@ -508,7 +508,12 @@ def generic():
     rich.print("[purple]Regular query, forward to SensorThings API")
     text, code = get_sta_request(request)
     opts = process_sensorthings_options(request.args.to_dict())
-    return process_sensorthings_response(request, json.loads(text))
+    try:
+        json_response = json.loads(text)
+    except json.decoder.JSONDecodeError:
+        return Response(text, code)
+
+    return process_sensorthings_response(request, json_response)
 
 
 @app.route('/Observations(<int:observation_id>)', methods=['GET'])
@@ -854,6 +859,10 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
 
     app.config['BASIC_AUTH_USERNAME'] = os.environ["STA_TS_USER"]
     app.config['BASIC_AUTH_PASSWORD'] = os.environ["STA_TS_PASSWORD"]
+    print_pwd = "*" * int(len(app.config['BASIC_AUTH_PASSWORD'][-4]))
+    print_pwd += app.config['BASIC_AUTH_PASSWORD'][-4:]
+    rich.print(f"STA User: '{ app.config['BASIC_AUTH_USERNAME']}'")
+    rich.print(f"STA password: '{print_pwd}'")
 
     if "STA_TS_DEBUG" in os.environ.keys():
         app.log.setLevel(logging.DEBUG)
