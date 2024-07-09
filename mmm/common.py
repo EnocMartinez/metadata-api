@@ -148,7 +148,7 @@ class LoggerSuperclass:
         mystr = "[%s] " % self.__logger_name + str(*args)
         self.__logger.error(RED + mystr + RST)
         if exception:
-            if type(exception) is Exception:
+            if isinstance(exception(), Exception):
                 raise exception(mystr)
             else:
                 raise ValueError(mystr)

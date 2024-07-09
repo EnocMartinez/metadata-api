@@ -16,7 +16,7 @@ import datetime
 import json
 import pandas as pd
 import os
-from mmm.common import YEL, RST, load_fields_from_dict, validate_schema, PRL
+from mmm.common import YEL, RST, load_fields_from_dict, validate_schema, PRL, setup_log
 from mmm.common import LoggerSuperclass
 import psycopg2
 from psycopg2 import sql
@@ -41,7 +41,7 @@ def validate_key(data, key, key_type, errortype=SyntaxError):
         raise errortype(f"Expected type of {key}  is {key_type}, got {type(data[key])}")
 
 
-def init_metadata_collector(secrets: dict):
+def init_metadata_collector(secrets: dict, log=None):
     """
     Initializes a Metadata Collector object from secrets file
     :param secrets: dict object from the secrets yaml file
@@ -50,37 +50,41 @@ def init_metadata_collector(secrets: dict):
     assert "mmapi" in secrets.keys(), "mmapi key not found!"
     __required_keys = [
         "connection",
-        "database",
         "default_author",
         "organization"
     ]
     for key in __required_keys:
         assert key in secrets["mmapi"].keys(), f"key '{key}' not found in secrets[\"mmapi\"]"
 
+    if not log:
+        log = setup_log("MC")
+
     return MetadataCollector(secrets["mmapi"]["connection"],
-                             secrets["mmapi"]["database"],
                              secrets["mmapi"]["default_author"],
-                             secrets["mmapi"]["organization"])
+                             secrets["mmapi"]["organization"],
+                             log)
 
 
-def init_metadata_collector_env():
+def init_metadata_collector_env(log=None):
     """
     Initializes a Metadata Collector object from environment variables
     :returns: MetadataCollector object
     """
     __required_keys = [
         "mmapi_connection",
-        "mmapi_database",
         "mmapi_default_author",
         "mmapi_organization"
     ]
     for key in __required_keys:
         assert key in os.environ.keys(), f"key '{key}' not environment variables"
 
+    if not log:
+        log = setup_log("MC")
+
     return MetadataCollector(os.environ["mmapi_connection"],
-                             os.environ["mmapi_database"],
                              os.environ["mmapi_default_author"],
-                             os.environ["mmapi_organization"])
+                             os.environ["mmapi_organization"],
+                             log)
 
 
 def postgres_results_to_dict(results, time_format="%Y-%m-%dT%H:%M:%SZ"):
@@ -105,11 +109,10 @@ def postgres_results_to_dict(results, time_format="%Y-%m-%dT%H:%M:%SZ"):
 
 
 class MetadataCollector(LoggerSuperclass):
-    def __init__(self, connection: {}, database_name: str, default_author: str, organization: str):
+    def __init__(self, connection: {}, default_author: str, organization: str, log: logging.Logger):
         """
         Initializes a connection to a PostgresQL database hosting metadata
         :param connection: connection string
-        :param database_name: database name
         :param default_author: default author (must be a people #id)
         :param organization: organization that owns the infrastructure (must be an organizations #id)
         """
@@ -119,7 +122,7 @@ class MetadataCollector(LoggerSuperclass):
                                  "organizations", "datasets", "operations", "activities", "projects", "resources",
                                  "programmes"]
 
-        LoggerSuperclass.__init__(self, logging.getLogger(), "MC", PRL)
+        LoggerSuperclass.__init__(self, log, "MC", PRL)
         self.info("Initializing MetadataCollector")
 
         self.default_author = default_author
@@ -158,8 +161,8 @@ class MetadataCollector(LoggerSuperclass):
         # the system and reduce the database workload
         self.__cache_timeout_s = 300  # 5 minutes
         self.__cache = {}
-
         self.used_time = 0
+
 
     def __init_database(self):
         """
@@ -171,9 +174,8 @@ class MetadataCollector(LoggerSuperclass):
             self.db.exec_query(f"create database {self.db_name};", fetch=False)
 
         if not self.db.check_if_database_exists(self.db_name + "_hist"):
-            self.info(f"Creating database {self.db_name + "_hist"}")
-            self.db.exec_query(f"create database {self.db_name + "_hist"};", fetch=False)
-
+            self.info(f"Creating database {self.db_name + '_hist'}")
+            self.db.exec_query(f"create database {self.db_name + '_hist'};", fetch=False)
 
     def __init_tables(self):
         """
@@ -306,7 +308,7 @@ class MetadataCollector(LoggerSuperclass):
         if collection not in self.collection_names:
             raise LookupError(f"Collection {collection} not found!")
 
-        query = f"select doc_id, author, doc_version, creationdate, modificationdate, doc from {collection}"
+        query = f"select doc_id, author, doc_version, creationdate, modificationdate, doc from {collection.lower()}"
 
         if filter:
             query += f" {filter}"
@@ -370,7 +372,7 @@ class MetadataCollector(LoggerSuperclass):
         document["#creationDate"] = now
         document["#modificationDate"] = now
         document["#author"] = author
-        self.debug(f"Inserting {document_id} from {collection}")
+        self.debug(f"Inserting {document_id} from {collection.lower()}")
         contents = self.strip_metadata_fields(document)
         insert_query = sql.SQL(f"""
             INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc)
@@ -393,7 +395,7 @@ class MetadataCollector(LoggerSuperclass):
         creation_date = document["#creationDate"]
         modification_date = document["#modificationDate"]
 
-        self.debug(f"Inserting {document_id} from {collection}")
+        self.debug(f"Inserting {document_id} from {collection.lower()}")
         contents = self.strip_metadata_fields(document)
         insert_query = sql.SQL(f"""
             INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc)
@@ -511,7 +513,7 @@ class MetadataCollector(LoggerSuperclass):
         :param collection: collection name
         :param history: if True delete also all history elements
         """
-        self.debug(f"Deleting {document_id} from {collection}")
+        self.debug(f"Deleting {document_id} from {collection.lower()}")
         query = f"delete from {collection.lower()} where doc_id = '{document_id}';"
         self.db.exec_query(query, fetch=False)
         if history:
@@ -883,9 +885,18 @@ def get_sensor_deployments(mc: MetadataCollector, sensor_id: str, station="") ->
     sensor_deployments = []
     for dep in deployments:
         if "@sensors" in dep["appliedTo"].keys() and sensor_id in dep["appliedTo"]["@sensors"]:
-            station = dep["where"]["@stations"]
-            deployment_time = dep["time"]
-            sensor_deployments.append((station, deployment_time))
+
+            # We can have the station in "where" or in "appliedTo"
+            if "@stations" in dep["where"].keys():
+                station = dep["where"]["@stations"]
+                deployment_time = dep["time"]
+                sensor_deployments.append((station, deployment_time))
+            elif "@stations" in dep["appliedTo"].keys():
+                station = dep["appliedTo"]["@stations"]
+                deployment_time = dep["time"]
+                sensor_deployments.append((station, deployment_time))
+            else:
+                raise ValueError(f"Wrong deployment format! {dep['#id']}")
 
     sensor_deployments = sorted(sensor_deployments, key=lambda x: x[1])
     return sensor_deployments

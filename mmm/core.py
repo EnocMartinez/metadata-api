@@ -15,7 +15,7 @@ import rich
 from mmm.common import load_fields_from_dict, YEL, RST
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
 from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream, \
-    HistoricalLocation
+    HistoricalLocation, set_sta_basic_auth
 from mmm.metadata_collector import get_station_coordinates, get_station_history, get_sensor_deployments
 from mmm.processes import average_process, inference_process
 from mmm.schemas import mmapi_data_types
@@ -171,17 +171,22 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
                                   groups=groups)
 
 
-def propagate_metadata_to_sensorthings(mc: MetadataCollector, collections: str, url, update=True, authentication=""):
+def propagate_metadata_to_sensorthings(mc: MetadataCollector, collections: str, url, update=True, auth=()):
     """
     Propagates info at MetadataCollctor the SensorThings API
     """
 
     assert (type(mc) is MetadataCollector)
     assert (type(collections) is list)
+
+    if auth:
+        set_sta_basic_auth(auth[0], auth[1])
+
     # Stations as thing
     if "all" in collections or collections == []:
         collections = mc.collection_names
-    rich.print(f"Propagating collections {collections}")
+    mc.info(f"Propagating collections {collections}")
+    mc.info(f"Using URL: {url}")
 
     sensor_ids = {}  # key: metadata #id, value: sensorthings ID
     things_ids = {}
