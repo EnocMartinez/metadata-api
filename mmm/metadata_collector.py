@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-This file implements the MetadataCollector, a class implementing metadata access / storage to a MongoDB database.
+This file implements the MetadataCollector, a class implementing metadata access / storage to a PostgresQL database
+storing JSON docs.
 
 author: Enoc Martínez
 institution: Universitat Politècnica de Catalunya (UPC)
@@ -8,15 +9,18 @@ email: enoc.martinez@upc.edu
 license: MIT
 created: 30/11/22
 """
+import logging
 import time
-
-from pymongo import MongoClient
+from mmm.data_sources.postgresql import PgDatabaseConnector
 import datetime
-import rich
 import json
 import pandas as pd
 import os
-from mmm.common import YEL, RST, load_fields_from_dict, validate_schema
+from mmm.common import YEL, RST, load_fields_from_dict, validate_schema, PRL
+from mmm.common import LoggerSuperclass
+import psycopg2
+from psycopg2 import sql
+import rich
 
 try:
     from mmm.schemas import mmm_schemas, mmm_metadata
@@ -25,27 +29,9 @@ except ImportError:
 
 
 def get_timestamp_string():
-    now = datetime.datetime.utcnow().isoformat()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     now = now.split(".")[0] + "Z"
     return now
-
-
-def strip_mongo_ids(doc: list or dict):
-    """
-    Strip _id elements from JSON structures
-    :param doc: MongoDB document, can be a list a dict or a list of dicts
-    :return: dict or list of dicts depending on input
-    """
-    if type(doc) is dict:
-        if "_id" in doc.keys():
-            doc.pop("_id")  # remove _id
-    elif type(doc) is list:
-        for d in doc:
-            if "_id" in d.keys():
-                d.pop("_id")  # remove _id
-    else:
-        raise TypeError(f"Expected dict or list of dicts, got {type(doc)}")
-    return doc
 
 
 def validate_key(data, key, key_type, errortype=SyntaxError):
@@ -53,8 +39,6 @@ def validate_key(data, key, key_type, errortype=SyntaxError):
         raise errortype(f"Required key {key} not found")
     elif type(data[key]) is not key_type:
         raise errortype(f"Expected type of {key}  is {key_type}, got {type(data[key])}")
-
-
 
 
 def init_metadata_collector(secrets: dict):
@@ -99,30 +83,73 @@ def init_metadata_collector_env():
                              os.environ["mmapi_organization"])
 
 
-class MetadataCollector:
-    def __init__(self, connection: str, database_name: str, default_author: str, organization: str, ensure_ids=True):
+def postgres_results_to_dict(results, time_format="%Y-%m-%dT%H:%M:%SZ"):
+    """
+    Convert the results from a postgres table into a dict
+    :param results: list of items straight from the database
+    :return: list of json docs
+    """
+    docs = []
+    for doc_id, author, version, creationDate, modificationDate, jsonb in results:
+        doc = {
+            "#id": doc_id,
+            "#author": author,
+            "#version": version,
+            "#creationDate": creationDate.strftime(time_format),
+            "#modificationDate": modificationDate.strftime(time_format)
+        }
+        doc.update(jsonb)
+        docs.append(doc)
+
+    return docs
+
+
+class MetadataCollector(LoggerSuperclass):
+    def __init__(self, connection: {}, database_name: str, default_author: str, organization: str):
         """
-        Initializes a connection to a MongoDB database hosting metadata
+        Initializes a connection to a PostgresQL database hosting metadata
         :param connection: connection string
         :param database_name: database name
         :param default_author: default author (must be a people #id)
         :param organization: organization that owns the infrastructure (must be an organizations #id)
-        :param ensure_ids: make sure that all elements have a unique #id
         """
-        self.default_author = default_author
-        self.organization = organization
-        self.__connection_chain = connection
-        self.__connection = MongoClient(connection, serverSelectionTimeoutMS=2000)
-        self.database_name = database_name
-        self.history_database_name = database_name + "_hist"
-        self.db = self.__connection[self.database_name]  # database with latest data
-        self.db_history = self.__connection[self.history_database_name]  # database with all archived versions
+
         # To create new collections, add them here
         self.collection_names = ["sensors", "stations", "variables", "qualityControl", "people", "units", "processes",
                                  "organizations", "datasets", "operations", "activities", "projects", "resources",
                                  "programmes"]
-        if ensure_ids:
-            self.__ensure_ids()  # make sure that all elements have a unique #id
+
+        LoggerSuperclass.__init__(self, logging.getLogger(), "MC", PRL)
+        self.info("Initializing MetadataCollector")
+
+        self.default_author = default_author
+        self.organization = organization
+        self.__connection_chain = connection
+
+        host = connection["db_host"]
+        port = connection["db_port"]
+        db_name = connection["db_name"]
+        self.db_name = db_name
+        db_user = connection["db_user"]
+        db_password = connection["db_password"]
+        print(db_name, db_user, host)
+        log = logging.getLogger()
+        try:
+            self.info(f"Connecting to database '{db_name}'...")
+            self.db = PgDatabaseConnector(host, port, db_name, db_user, db_password, log)
+            self.db_hist = PgDatabaseConnector(host, port, db_name + "_hist", db_user, db_password, log, autocommit=True)
+            self.info("Database ok")
+        except psycopg2.OperationalError:
+            self.info(f"Database not initialized! creating '{db_name}'")
+            # Probably database does not exist! initialize databases
+            # Connect to the user database
+            self.db = PgDatabaseConnector(host, port, db_user, db_user, db_password, log, autocommit=True)
+            self.__init_database()
+            self.db.close()
+            self.db = PgDatabaseConnector(host, port, db_name, db_user, db_password, log)
+            self.db_hist = PgDatabaseConnector(host, port, db_name + "_hist", db_user, db_password, log)
+        self.__init_tables()
+        self.info("Database initialized")
 
         self.metadata_schema = mmm_metadata  # JSON schema for
         self.schemas = mmm_schemas
@@ -133,6 +160,60 @@ class MetadataCollector:
         self.__cache = {}
 
         self.used_time = 0
+
+    def __init_database(self):
+        """
+        Creates a documents table
+        :return:
+        """
+        if not self.db.check_if_database_exists(self.db_name):
+            self.info(f"Creating database {self.db_name}")
+            self.db.exec_query(f"create database {self.db_name};", fetch=False)
+
+        if not self.db.check_if_database_exists(self.db_name + "_hist"):
+            self.info(f"Creating database {self.db_name + "_hist"}")
+            self.db.exec_query(f"create database {self.db_name + "_hist"};", fetch=False)
+
+
+    def __init_tables(self):
+        """
+        Create database tables
+        """
+        for collection in self.collection_names:
+            collection = collection.lower()  # use lowercase in SQL
+            if not self.db.check_if_table_exists(collection):
+                self.info(f"   Creating table {collection}")
+                query = f"""
+                CREATE TABLE {collection} (
+                    doc_id VARCHAR(255) PRIMARY KEY,                
+                    author VARCHAR(255),
+                    doc_version SMALLINT,
+                    creationDate TIMESTAMPTZ,
+                    modificationDate TIMESTAMPTZ,
+                    doc JSONB
+                );
+                """
+                self.db.exec_query(query, fetch=False)
+
+        for collection in self.collection_names:
+            collection = collection.lower()  # use lowercase in SQL
+            if not self.db_hist.check_if_table_exists(collection):
+                self.info(f"Creating table {collection}")
+                query = f"""
+                 CREATE TABLE {collection} (
+                     doc_id VARCHAR(255),                
+                     author VARCHAR(255),
+                     doc_version SMALLINT,
+                     creationDate TIMESTAMPTZ,
+                     modificationDate TIMESTAMPTZ,
+                     doc JSONB
+                 );
+                 """
+                self.db_hist.exec_query(query, fetch=False)
+                query = (f"alter table {collection} add constraint {collection}_id_version_unique unique"
+                         f" (doc_id, doc_version);")
+                self.db_hist.exec_query(query, fetch=False)
+
 
     def __add_to_cache(self, collection, doc):
         """
@@ -166,35 +247,7 @@ class MetadataCollector:
             return None
         return doc
 
-
-    def __ensure_ids(self):
-        """
-        Ensures that all elements in all collections have #id attribute set with a unique value
-        :return: None
-        :raises:  ValueError if duplicated elements are found or KeyError if #id is not present
-        """
-        errors = 0
-        for c in self.collection_names:
-            documents = self.get_documents(c)
-            ids = []
-            for doc in documents:
-                try:
-                    ids.append(doc["#id"])
-                except KeyError:
-                    rich.print(f"[red]{json.dumps(doc, indent=2)}")
-                    raise KeyError("#id not found in doc")
-            id_list = []
-            for check_id in ids:
-                if check_id not in id_list:
-                    id_list.append(check_id)
-                else:
-                    rich.print(f"[red]ERROR: collection {c} has duplicated id='{check_id}'")
-                    errors += 1
-        if errors:
-            raise ValueError(f"Got {errors} duplicated elements!")
-
-    @staticmethod
-    def validate_document(doc: dict, collection: str, exception=True):
+    def validate_document(self, doc: dict, collection: str, exception=True, metadata=True):
         """
         This method takes a document and checks if it is valid. A document should at least contain the following fields
             #id: (string) id of the document
@@ -204,20 +257,22 @@ class MetadataCollector:
         :param doc: JSON dict with document data
         :param collection: collection name
         :param exception: Wether to throw and exception on error or not
+        :param metadata: validate the metadata or not (elements starting with #)
         :return: Nothing
         :raise: SyntaxError
         """
         errors = []
-        errors = validate_schema(doc, mmm_metadata, errors=errors)
+        if metadata:
+            errors = validate_schema(doc, mmm_metadata, errors=errors)
         if collection not in mmm_schemas.keys():
-            rich.print(f"[yellow]WARNING: no schema for '{collection}'")
+            self.warning(f"WARNING: no schema for '{collection}'")
         else:
             errors = validate_schema(doc, mmm_schemas[collection], errors=errors)
         if errors:
             for e in errors:
-                rich.print(f"[red]ERROR: {e}")
-
+                self.error(f"{e}")
             if exception:
+                rich.print(doc)
                 raise ValueError(f"Document not valid: {str(errors)}")
             return False  # return false if exception=False
         else:
@@ -238,35 +293,37 @@ class MetadataCollector:
         :param collection: collection name
         :return: list of ids
         """
-        documents = self.get_documents(collection, history=False)
-        return [d["#id"] for d in documents]
+        return self.db.list_from_query(f"select doc_id from {collection.lower()};")
 
-    def get_documents(self, collection: str, mongo_filter=None, history=False) -> list:
+    def get_documents(self, collection: str, filter="", history=False) -> list:
         """
         Return all documents in a collection
         :param collection: collectio name
-        :param mongo_filter: filters to apply to the query
+        :param filter: sql option to add at the query, like "id = 'myid' limit 1"
         :param history: search in archived documents
         :return: list of documents that match the criteria
         """
-        if mongo_filter is None:
-            mongo_filter = {}
-        if history:
-            db = self.db_history
-        else:
-            db = self.db
-
         if collection not in self.collection_names:
             raise LookupError(f"Collection {collection} not found!")
 
-        db_collection = db[collection]
-        cursor = db_collection.find(mongo_filter)
-        documents = [document for document in cursor]  # convert cursor to list
-        return strip_mongo_ids(documents)
+        query = f"select doc_id, author, doc_version, creationdate, modificationdate, doc from {collection}"
+
+        if filter:
+            query += f" {filter}"
+        query += ";"
+
+        if not history:
+            results = self.db.list_from_query(query)
+        else:
+            results = self.db_hist.list_from_query(query)
+        docs = postgres_results_to_dict(results)
+        if not history:
+            for doc in docs:
+                self.__add_to_cache(collection, doc)
+        return docs
 
     # --------- Document Operations --------- #
-    def insert_document(self, collection: str, document: dict, author: str = "", force=False, force_meta=False,
-                        update=False):
+    def insert_document(self, collection: str, document: dict, author: str = "", force=False, update=False):
         """
         Adds metadata to a document and then inserts it to a collection.
         :param collection: collection name
@@ -285,35 +342,73 @@ class MetadataCollector:
         if collection not in self.collection_names:
             raise ValueError(f"Collection {collection} not valid!")
 
+        print(self.get_identifiers(collection))
         if document["#id"] in self.get_identifiers(collection):
             if update:
+                self.warning(f"Document '{document['#id']}' already exists! udpating")
                 return self.replace_document(collection, document["#id"], document, force=force)
             else:
                 raise NameError(f"{collection} document with id {document['#id']} already exists!")
 
-        if not force_meta:  # By default generate the metadata
-            now = get_timestamp_string()
-            new_document = {
-                "#id": document["#id"],
-                "#version": 1,
-                "#creationDate": now,
-                "#modificationDate": now,
-                "#author": author,
-            }
-            contents = {key: value for key, value in document.items() if not key.startswith("#")}
-            new_document.update(contents)
-        else:  # force input metadata
-            new_document = document
+        # Check if there's an historical version
+        document_id = document["#id"]
+        self.debug(f"Checking if there are historical verisons for '{collection}:{document_id}'")
+        q = (f"select doc_version from {collection.lower()} where doc_id = '{document_id}' order by doc_version desc"
+             f" limit 1;")
+        versions = self.db_hist.list_from_query(q)
+        if len(versions) > 0 :
+            self.debug(f"historical version {versions[0]}")
+            version = versions[0] + 1
+        else:
+            version = 1
+            self.debug(f" no historical, setting v=0")
 
-        self.validate_document(new_document, collection, exception=(not force))
-        self.db[collection].insert_one(new_document.copy())  # use copy to avoid pymongo to modify original dict
-        self.db_history[collection].insert_one(new_document.copy())  # use copy to avoid pymongo to modify original dict
-        return new_document
+        now = get_timestamp_string()
+        self.validate_document(document, collection, exception=(not force), metadata=False)
+
+        document["#version"] = version
+        document["#creationDate"] = now
+        document["#modificationDate"] = now
+        document["#author"] = author
+        self.debug(f"Inserting {document_id} from {collection}")
+        contents = self.strip_metadata_fields(document)
+        insert_query = sql.SQL(f"""
+            INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """)
+        values = (document_id, author, document["#version"],  document["#creationDate"], document["#modificationDate"],
+                  json.dumps(contents))
+
+        self.db.exec_query((insert_query, values), fetch=False)
+        self.insert_document_history(collection, document)
+        return document
+
+    def insert_document_history(self, collection: str, document: dict, author: str = ""):
+        if collection not in self.collection_names:
+            raise ValueError(f"Collection {collection} not valid!")
+        self.validate_document(document, collection, exception=True)
+        document_id = document["#id"]
+        version = document["#version"]
+        author = document["#author"]
+        creation_date = document["#creationDate"]
+        modification_date = document["#modificationDate"]
+
+        self.debug(f"Inserting {document_id} from {collection}")
+        contents = self.strip_metadata_fields(document)
+        insert_query = sql.SQL(f"""
+            INSERT INTO {collection.lower()} (doc_id, author, doc_version, creationDate, modificationDate, doc)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """)
+        values = (document_id, author, version, creation_date, modification_date, json.dumps(contents))
+        self.db_hist.exec_query((insert_query, values), fetch=False)
+        return document
 
     def exists(self, collection, document_id):
-        if self.db[collection].find_one({"#id": document_id}):  # if it is found
+        try:
+            self.get_document(collection, document_id)
             return True
-        return False
+        except LookupError:
+            return False
 
     def get_document(self, collection: str, document_id: str, version: int = 0):
         """
@@ -324,54 +419,25 @@ class MetadataCollector:
         :param document_id: id of the document
         :param version: version (int)
         """
-        t = time.time()
-        # First check if the doc is in the cache
-        doc = self.__get_from_cache(collection, document_id)
-        if doc:  # if not None, we have it on cache, return it
-            self.used_time += time.time() - t
-            return doc
+        if not version:
+            docs = self.get_documents(collection, filter=f"where doc_id = '{document_id}'")
 
-        if version:
-            db = self.db_history
-            rich.print("[purple]Using historical database")
         else:
-            db = self.db
+            docs = self.get_documents(collection, filter=f"where doc_id = '{document_id}' and doc_version = {version}",
+                                      history=True)
 
-        if collection not in self.collection_names:
-            raise LookupError(f"Collection {collection} not found!")
-
-        db_collection = db[collection]
-        mongo_filter = {"#id": document_id}
-        if version:
-            mongo_filter["#version"] = int(version)
-        cursor = db_collection.find(mongo_filter)
-
-        documents = [document for document in cursor]  # convert cursor to list
-        n = len(documents)
-        if len(documents) > 1:
-            raise AssertionError(f"Got {n} multiple documents in collection {collection} with #id = '{document_id}'")
-        elif len(documents) == 0:
-            raise LookupError(f"Element {collection} with   with #id = '{document_id}' not found")
-
-        doc = strip_mongo_ids(documents[0])
-        # Adding document to the cache
-        self.__add_to_cache(collection, doc)
-        self.used_time += time.time() - t
-        return doc
+        if len(docs) > 1:
+            self.error(f"Expected only one document with id={document_id}, but database returned {len(docs)}!", exception=True)
+        elif len(docs) == 0:
+            self.error(f"Document '{document_id}' not found in collection '{collection}'", exception=LookupError)
+        return docs[0]
 
     def get_document_history(self, collection, document_id):
         """
         Looks for all versions of a document in the history database and returns them all.
         """
-        db = self.db_history
-        db_collection = db[collection]
-        filter = {"#id": document_id}
-        cursor = db_collection.find(filter)
-        documents = [strip_mongo_ids(document) for document in cursor]  # convert cursor to list
-        if len(documents) == 0:
-            raise LookupError(f"Element {collection} with  filter {json.dumps(filter)} not found")
-
-        return documents
+        return self.get_documents(collection, filter=f"where doc_id = '{document_id}' order by doc_version desc",
+                                  history=True)
 
     def replace_document(self, collection: str, document_id: str, document: dict, author=False, force=False):
         """
@@ -391,36 +457,65 @@ class MetadataCollector:
             author = self.default_author
 
         old_document = self.get_document(collection, document_id)  # getting old metadata
+        rich.print(old_document)
         metadata = {key: value for key, value in old_document.items() if key.startswith("#")}
-        old_contents = {key: value for key, value in old_document.items() if not key.startswith("#")}
         metadata["#version"] += 1
         metadata["#modificationDate"] = get_timestamp_string()
         metadata["#author"] = author  # update author
+        metadata["#creationDate"] = old_document["#creationDate"]
+
+        old_contents = {key: value for key, value in old_document.items() if not key.startswith("#")}
 
         # keep only elements that are not metadata
-        contents = {key: value for key, value in document.items() if not key.startswith("#")}
+        contents = self.strip_metadata_fields(document)
+        new_document = metadata  # start new document with metadata
+        new_document.update(contents)  # add contents after metadata
+        rich.print(new_document)
 
         if contents == old_contents:
             if force:
-                rich.print(f"[yellow]WARNING! document {document['#id']} is identical to previous one")
+                self.warning(f"document {document['#id']} is identical to previous one")
             else:
-                raise AssertionError("old and new document are equal, aborting")
+                self.warning(f"old and new documents are equal for {document['#id']}, ignoring")
+                return new_document
 
-        new_document = metadata  # start new document with metadata
-        new_document.update(contents)  # add contents after metadata
-        self.validate_document(new_document, collection, exception=(not force))
-        self.db[collection].replace_one({"#id": document_id}, new_document.copy())
-        self.db_history[collection].insert_one(new_document.copy())
+        self.validate_document(new_document, collection, exception=(not force), metadata=False)
+
+        # Define the update query
+        query = sql.SQL(f"""
+            UPDATE {collection.lower()}
+            SET author = %s,
+                doc_version = %s,                
+                modificationdate = %s,
+                doc = %s
+            WHERE doc_id = '{document_id}';
+        """)
+
+        # Data to update
+        new_data = (
+            author,
+            metadata["#version"],
+            metadata["#modificationDate"],
+            json.dumps(contents),
+        )
+        self.db.exec_query((query, new_data), fetch=False)
+
+        # Now add it to history
+        self.insert_document_history(collection, new_document)
         return new_document
 
-    def delete_document(self, collection: str, document_id: str):
+    def delete_document(self, collection: str, document_id: str, history=False):
         """
         drops an element in collection
         :param document_id: #id
         :param collection: collection name
+        :param history: if True delete also all history elements
         """
-        db_collection = self.db[collection]
-        db_collection.delete_one({"#id": document_id})
+        self.debug(f"Deleting {document_id} from {collection}")
+        query = f"delete from {collection.lower()} where doc_id = '{document_id}';"
+        self.db.exec_query(query, fetch=False)
+        if history:
+            self.db_hist.exec_query(query, fetch=False)
 
     # --------- Wrappers for collections --------- #
     def get_sensor(self, identifier):
@@ -542,17 +637,8 @@ class MetadataCollector:
             3. Copy all documents from database to history database
         :return: Nothing
         """
-        self.__connection.drop_database(self.db_history)
-        self.db_history = self.__connection[self.history_database_name]
-        for col in self.collection_names:
-            _ = self.db_history[col]  # Create collection
-            docs = self.get_documents(col)
-            for doc in docs:
-                if doc["#version"] != 1:
-                    rich.print(f"modifying {col} {doc['#id']} v={doc['#version']}")
-                    # Modify directly through pymongo
-                    self.db[col].replace_one({"#id": doc['#id']}, doc.copy())
-                self.db_history[col].insert_one(doc)
+        raise ValueError("Unimplemented")
+
 
     def get_contact_by_role(self, doc: dict, role: str) -> {dict, str}:
         """
@@ -653,7 +739,7 @@ class MetadataCollector:
         if collections is None:
             collections = []
         assert (type(collections) is list)
-        rich.print("[cyan] ==> Ensuring all relations in MongoDB database <==")
+
         errors = []
         warnings = []
         if not collections:
@@ -664,7 +750,7 @@ class MetadataCollector:
             if col in self.schemas.keys():
                 schema = self.schemas[col]
             else:
-                rich.print(f"[yellow]Missing schema for collection {col}!")
+                self.warning(f"Missing schema for collection {col}!")
 
             docs = self.get_documents(col)
             for doc in docs:
@@ -681,23 +767,24 @@ class MetadataCollector:
                 warnings = self.__warning(col, doc, warnings)
 
         if warnings:
-            rich.print("\nWarning report")
-            [rich.print(f"  [yellow]{warning}") for warning in warnings]
-            rich.print(f"[yellow]Got {len(warnings)} warnings!")
+            self.info("Warning report")
+            [self.info(f"  {warning}") for warning in warnings]
+            self.warning(f"Got {len(warnings)} warnings!")
 
         if errors:
-            rich.print("\nError report")
-            [rich.print(f"  [yellow]{error}") for error in errors]
-            rich.print(f"[red]Got {len(errors)} errors!")
+            self.info("Error report")
+            [self.info(f"  {error}") for error in errors]
+            self.error(f"[red]Got {len(errors)} errors!")
         else:
-            rich.print(f"[green]\n=) =) Congratulations! You have a healthy database (= (=\n")
+            self.info(f"  =) =) Congratulations! You have a healthy database (= (=\n")
 
     def get_station_position(self, station_name, timestamp) -> (float, float, float):
         """
         Returns (latitude, longitude, depth) for a station at a particular time. It looks for all deployments of a
         station and selects the one immediately before the selected time.
         """
-        hist = self.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@stations": station_name})
+        sql_filter = f" where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@stations' = '{station_name}'"
+        hist = self.get_documents("activities", sql_filter)
         data = {
             "time": [],
             "latitude": [],
@@ -736,7 +823,7 @@ class MetadataCollector:
         for col in self.collection_names:
             docs = self.get_documents(col)
             for doc in docs:
-                self.delete_document(col, doc["#id"])
+                self.delete_document(col, doc["#id"], history=True)
 
 
 def get_station_deployments(mc: MetadataCollector, station: dict) -> list:
@@ -760,7 +847,8 @@ def get_station_deployments(mc: MetadataCollector, station: dict) -> list:
     deployments = []  # array of (stationId, deploymentTime)
 
     # Get all activities with type=deployment and involving this station
-    hist = mc.get_documents("activities", mongo_filter={"type": "deployment", "appliedTo.@stations": station_id})
+    sql_filter = f"where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@stations' = '{station_id}'"
+    hist = mc.get_documents("activities", filter=sql_filter)
 
     for dep in hist:
         deployment_time = dep["time"]
@@ -790,7 +878,8 @@ def get_sensor_deployments(mc: MetadataCollector, sensor_id: str, station="") ->
     assert type(mc) is MetadataCollector
     assert type(sensor_id) is str
     # Get all activities with type=deployment and involving this sensor
-    deployments = mc.get_documents("activities", mongo_filter={"type": "deployment"})
+    sql_filter = f" where doc->>'type' = 'deployment'"
+    deployments = mc.get_documents("activities", filter=sql_filter)
     sensor_deployments = []
     for dep in deployments:
         if "@sensors" in dep["appliedTo"].keys() and sensor_id in dep["appliedTo"]["@sensors"]:
@@ -837,8 +926,8 @@ def get_station_history(mc: MetadataCollector, name: str) -> list:
     """
     Looks for all activities with the
     """
-    station_filter = {"appliedTo.@stations": name}
-    activities = mc.get_documents("activities", mongo_filter=station_filter)
+    sql_filter = f" where doc->'appliedTo'->>'@stations' = '{name}'"
+    activities = mc.get_documents("activities", filter=sql_filter)
     history = []
     for a in activities:
         h = load_fields_from_dict(a, ["time", "type", "description", "where/position"],

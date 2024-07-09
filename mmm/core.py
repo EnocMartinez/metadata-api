@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This file contains high-level functions that connects MongoDB metadata with other services such as CKAN, ERDDAP, etc.
+This file contains high-level functions that connects metadata DB with other services such as CKAN, ERDDAP, etc.
 
 author: Enoc Martínez
 institution: Universitat Politècnica de Catalunya (UPC)
@@ -36,9 +36,9 @@ def get_properties(doc: dict, properties: list) -> dict:
     return data
 
 
-def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
+def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
     """
-    Propagates metadata in MongoDB to CKAN
+    Propagates metadata from metadata database to CKAN
 
     :param mc: MetadataCollector
     :param ckan: CkanClient object
@@ -57,7 +57,7 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
     if len(collections) == 0:
         collections = mc.collection_names
 
-    rich.print("Propagating data from MongoDB to CKAN")
+    rich.print("Propagating data from Metadata DB to CKAN")
     rich.print(f"Using the following collections: {collections}")
 
     # Institutions
@@ -171,7 +171,7 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
                                   groups=groups)
 
 
-def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, url, update=True, authentication=""):
+def propagate_metadata_to_sensorthings(mc: MetadataCollector, collections: str, url, update=True, authentication=""):
     """
     Propagates info at MetadataCollctor the SensorThings API
     """
@@ -183,7 +183,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
         collections = mc.collection_names
     rich.print(f"Propagating collections {collections}")
 
-    sensor_ids = {}  # key: mongodb #id, value: sensorthings ID
+    sensor_ids = {}  # key: metadata #id, value: sensorthings ID
     things_ids = {}
     location_ids = {}
     obs_props_ids = {}

@@ -62,7 +62,7 @@ def calculate_time_intervals(time_start: str, time_end: str, periodicity=""):
 def generate_dataset(dataset_id: str, time_start: str, time_end: str, out_folder: str, secrets, periodicity="",
                      ckan=False, force=False, format:str= "") -> list:
     """
-    Generate a dataset following the configuration in the MongoDB dataset register.
+    Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
     :param time_start:
     :param time_end:

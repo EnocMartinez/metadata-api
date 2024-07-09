@@ -197,20 +197,6 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
             del df["stdev"]
         return df.set_index("timestamp")
 
-    def check_if_table_exists(self, view_name):
-        """
-        Checks if a view already exists
-        :param view_name: database view to check if exists
-        :return: True if exists, False if it doesn't
-        """
-        # Select all from information_schema
-        query = "SELECT table_name FROM information_schema.tables"
-        df = self.dataframe_from_query(query)
-        table_names = df["table_name"].values
-        if view_name in table_names:
-            return True
-        return False
-
     def dict_from_query(self, query, debug=False):
         response = self.exec_query(query, debug=debug, fetch=True)
         if len(response) == 0:

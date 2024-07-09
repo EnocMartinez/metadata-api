@@ -144,11 +144,15 @@ class LoggerSuperclass:
         mystr = YEL + "[%s] " % self.__logger_name + str(*args) + RST
         self.__logger.warning(mystr)
 
-    def error(self, *args, exception=False):
+    def error(self, *args, exception: any = False):
         mystr = "[%s] " % self.__logger_name + str(*args)
         self.__logger.error(RED + mystr + RST)
         if exception:
-            raise ValueError(mystr)
+            if type(exception) is Exception:
+                raise exception(mystr)
+            else:
+                raise ValueError(mystr)
+
 
     def debug(self, *args):
         mystr = self.__log_colour + "[%s] " % self.__logger_name + str(*args) + RST
@@ -266,7 +270,7 @@ def __get_field(doc: dict, key: str):
 
 def load_fields_from_dict(doc: dict, fields: list, rename: dict = {}) -> dict:
     """
-    Takes a document from MongoDB and returns all fields in list. If a field in the list is not there, ignore it:
+    Takes a document from metadata database and returns all fields in list. If a field in the list is not there, ignore it:
 
         doc = {"a": 1, "b": 1  "c": 1} and fields = ["a", "b", "d"]
             return {"a": 1, "b": 1 }

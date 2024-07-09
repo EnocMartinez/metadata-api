@@ -9,7 +9,7 @@ license: MIT
 created: 21/09/2023
 """
 from argparse import ArgumentParser
-from mmm import MetadataCollector, CkanClient, propagate_mongodb_to_sensorthings
+from mmm import MetadataCollector, CkanClient, propagate_metadata_to_sensorthings
 from mmm.metadata_collector import init_metadata_collector
 import yaml
 import rich

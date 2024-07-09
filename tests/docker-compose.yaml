@@ -55,18 +55,17 @@ services:
       start_period: 120s
 
   mmapi-db:
-    image: mongodb/mongodb-community-server:7.0.1-ubuntu2204
+    image: postgres:15.7-alpine3.20
     container_name: mmapi-db-test
     ports:
-      - "27017:27017"
+      - 5434:5432
     environment:
-      - MONGODB_INITDB_ROOT_USERNAME=testuser
-      - MONGODB_INITDB_ROOT_PASSWORD=complexpassword
-      - mmapi_connection="mongodb://testuser:complexpassword@mmapi-db:27017"
-      - mmapi_database="metadata"
-      - mmapi_default_author="enoc_martinez"
-      - mmapi_organization="UPC"
-      - mmapi_port=5000
+      - POSTGRES_USER=postgres
+      - POSTGRES_DB=postgres
+      - POSTGRES_PASSWORD=verysecretpassword
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "postgres"]
 
   fileserver:
     image: nginx:1.25.3-alpine-slim

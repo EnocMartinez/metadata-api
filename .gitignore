@@ -3,7 +3,8 @@ secrets*.yaml
 log/
 MongoData
 *.csv
-
+tests/conf/.datasets.xml.*
+**/.emso/**
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -11,6 +12,7 @@ __pycache__/
 **/*.xml
 # C extensions
 *.so
+.idea
 
 # Distribution / packaging
 .Python

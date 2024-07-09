@@ -24,7 +24,7 @@ import json
 from PIL import Image, ImageDraw
 
 try:
-    from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data, propagate_mongodb_to_ckan, \
+    from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data, propagate_metadata_to_ckan, \
         CkanClient, get_station_deployments
 except ModuleNotFoundError:
     # Get the directory of the current script
@@ -35,8 +35,8 @@ except ModuleNotFoundError:
     # Add the parent directory to the sys.path
     sys.path.insert(0, parent_dir)
 
-    from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_mongodb_to_sensorthings,
-                     bulk_load_data, propagate_mongodb_to_ckan, CkanClient, get_station_deployments)
+    from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_metadata_to_sensorthings,
+                     bulk_load_data, propagate_metadata_to_ckan, CkanClient, get_station_deployments)
     from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url
     from mmapi import run_metadata_api
     from sta_timeseries import run_sta_timeseries_api
@@ -53,6 +53,13 @@ def get_json(url, params={}):
 def post_json(url, data):
     headers = {"Content-Type": "application/json"}
     r = requests.post(url, headers=headers, data=json.dumps(data))
+    if r.status_code > 299:
+        raise ConnectionError(f"HTTP error='{r.status_code}' at url={url}")
+
+
+def patch_json(url, data):
+    headers = {"Content-Type": "application/json"}
+    r = requests.patch(url, headers=headers, data=json.dumps(data))
     if r.status_code > 299:
         raise ConnectionError(f"HTTP error='{r.status_code}' at url={url}")
 
@@ -82,6 +89,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     cls.sta_ts_url = line.split("=")[1].replace("\"", "")
                     break
 
+        os.makedirs("erddapData", mode=0o777)
         # Create volumes for all docker services
         with open("docker-compose.yaml") as f:
             docker_config = yaml.safe_load(f)
@@ -115,7 +123,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         cls.dc = init_data_collector(conf, log, mc=cls.mc)
         cls.stadb = cls.dc.sta
 
-        log.info("Clearing MongoDB database...")
+        log.info("Clearing Metadata DB database...")
         cls.mc.drop_all()
         cls.dc.sta.drop_all()
 
@@ -172,7 +180,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.log.info("Inserting several 'units' via API")
         data = {
             "#id": "degrees_celsius",
-            "name": "degrees Celsius",
+            "name": "degrees Celsius2",
             "symbol": "degC",
             "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UPAA/",
             "type": "linear"
@@ -189,8 +197,40 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         units = get_json(url)
         self.assertEqual(data["symbol"], units["symbol"])
 
+        # Make sure that update works
+
     def test_03_add_via_api(self):
         """adding units and variables via API"""
+        d = {
+            "#id": "siemens_per_metre",
+            "name": "siemens per metre1",
+            "symbol": "S/m",
+            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UECA/",
+            "type": "linear"
+        }
+        post_json(self.mmapi_url + "/units", d)
+
+        # Ensure history
+        d = {
+            "#id": "siemens_per_metre",
+            "name": "siemens per metre2",
+            "symbol": "S/m",
+            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UECA/",
+            "type": "linear"
+        }
+        self.mc.replace_document("units", d["#id"], d)
+
+        d1 = get_json(self.mmapi_url + "/units/siemens_per_metre/history/1")
+        d2 = get_json(self.mmapi_url + "/units/siemens_per_metre/history/2")
+
+        self.assertEqual(d1["name"], "siemens per metre1")
+        self.assertEqual(d2["name"], "siemens per metre2")
+
+        # Now delete siemens_per_metre from current database, but not from history
+        self.mc.delete_document("units", "siemens_per_metre")
+
+        # Now insert it again, we should keep version history!
+
         d = {
             "#id": "siemens_per_metre",
             "name": "siemens per metre",
@@ -198,7 +238,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UECA/",
             "type": "linear"
         }
-        post_json(self.mmapi_url + "/units", d)
+        resp = post_json(self.mmapi_url + "/units", d)
+        rich.print(resp)
+
+
+        # Make sure that we can access the v3 from the history endpoint
+        d3 = get_json(self.mmapi_url + "/units/siemens_per_metre/history/3")
+        self.assertEqual(d3["name"], "siemens per metre")
 
         d = {
             "#id": "TEMP",
@@ -296,6 +342,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_04_assert_schema(self):
         """trying to insert a non-compliant document to catch the exception"""
+        self.info("Inserting an erroneous unit")
         d = {
             "#id": "CNDC2",
             "standard_nam2e": "sea_water_electrical_conductivity",
@@ -305,7 +352,18 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "type": "environmental"
         }
         with self.assertRaises(ValueError) as cm:
-            self.mc.insert_document("units", d)
+            self.mc.insert_document("variables", d)
+
+        d = {
+            "#id": "CNDC",
+            "standard_name": "sea_water_electrical_conductivity",
+            "description": "sea water electrical conductivity UPDATED",
+            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/CNDCST01/",
+            "cf_compliant": True,
+            "type": "environmental"
+        }
+        self.info("Updating a document")
+        self.mc.insert_document("variables", d, update=True)
 
     def test_05_add_process(self):
         """Adding average process"""
@@ -1088,8 +1146,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.mc.insert_document("datasets", d)
 
     def test_20_propagate_to_sensorthings(self):
-        """Propagate metadata from MongoDB to SensorThingsAPI"""
-        propagate_mongodb_to_sensorthings(self.mc, [], self.conf["sensorthings"]["url"], update=True)
+        """Propagate metadata from Metadata DB to SensorThingsAPI"""
+        propagate_metadata_to_sensorthings(self.mc, [], self.conf["sensorthings"]["url"], update=True)
 
         # Make sure that we have defaultFeatureOfInterest
         self.dc.sta.get_datastream_id("AWAC", "OBSEA", "CDIR", "profiles", "30min")
@@ -1682,7 +1740,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_70_propagate_to_ckan(self):
         rich.print("==== setup CKAN ====")
-        propagate_mongodb_to_ckan(self.mc, self.ckan, collections=[])
+        propagate_metadata_to_ckan(self.mc, self.ckan, collections=[])
 
     def test_71_generate_fileserver_datasets(self):
         """Creating a dataset"""
@@ -1755,7 +1813,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     @classmethod
     def tearDownClass(cls):
         cls.log.info("stopping containers")
-
         run_subprocess("docker compose down")
         rich.print("Deleting temporal docker volumes...")
         for volume in cls.docker_volumes:

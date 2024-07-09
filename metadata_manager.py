@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This script connects to a MongoDB database and converts from the database to JSON files. Can be used to perform simple
+This script connects to a PostgresQL database and converts from the database to JSON files. Can be used to perform simple
 CRUD operations from local files.
 
 author: Enoc Martínez
@@ -10,7 +10,9 @@ license: MIT
 created: 21/09/2023
 """
 from argparse import ArgumentParser, ArgumentError
-from mmm.metadata_collector import MetadataCollector, strip_mongo_ids, init_metadata_collector
+
+from mmm import setup_log
+from mmm.metadata_collector import MetadataCollector, init_metadata_collector
 import yaml
 import rich
 import os
@@ -18,9 +20,9 @@ import time
 import json
 
 
-def load_from_mongodb(mc, subset=[], history=False, verbose=False):
+def load_from_database(mc, subset=[], history=False, verbose=False):
     """
-    Loads ALL data from mongodb into dict
+    Loads ALL data from database into dict
     :param mc: MetadataCollector
     :param history: Use history database
     :param verbose: print additional info
@@ -47,7 +49,7 @@ def load_from_mongodb(mc, subset=[], history=False, verbose=False):
 
 def load_from_filesystem(folder, subset=[], history=False):
     """
-    Loads ALL data from mongodb into dict
+    Loads ALL data from database into dict
     :param folder: metadata folder
     :return: dictionary with all data
     """
@@ -165,12 +167,12 @@ def compoare_fs_to_db(db_data, fs_data) -> list:
 if __name__ == "__main__":
     argparser = ArgumentParser()
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets-test.yaml")
-    argparser.add_argument("-g", "--get", help="Get all metadata from a MongoDB and stores it to JSON files", action="store_true")
+    argparser.add_argument("-g", "--get", help="Get all metadata from a database and stores it to JSON files", action="store_true")
     argparser.add_argument("-p", "--put", help="Puts all metadata from folder and  and stores it to JSON", action="store_true")
     argparser.add_argument("-S", "--status", help="Shows documents that have been modified", action="store_true")
     argparser.add_argument("--clear", help="Clear temporal files", action="store_true")
     argparser.add_argument("-c", "--collections", help="Only use certain collections (comma-separated list)", default=[])
-    argparser.add_argument("-f", "--folder", help="folder to store all metadata, by default 'MongoData'", type=str, default="MongoData")
+    argparser.add_argument("-f", "--folder", help="folder to store all metadata, by default 'Metadata'", type=str, default="Metadata")
     argparser.add_argument("-v", "--verbose", help="Show more info", action="store_true")
     argparser.add_argument("--clear-history", help="Delete ALL history and reset version to 1", action="store_true")
     argparser.add_argument("--healthcheck", help="Ensure all relations", action="store_true")
@@ -178,12 +180,13 @@ if __name__ == "__main__":
     argparser.add_argument("-m", "--force-metadata", help="Force the metadata as is in the document", action="store_true")
 
     args = argparser.parse_args()
-    
+    log = setup_log("log")
     with open(args.secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
+    print("init...")
     mc = init_metadata_collector(secrets)
 
-    db_name = mc.database_name
+    db_name = "metadata"
     db_name_hist = db_name + "_hist"
     folder = os.path.join(args.folder, db_name)
     folder_hist = os.path.join(args.folder, db_name_hist)
@@ -203,10 +206,10 @@ if __name__ == "__main__":
             rich.print("cancelling request")
             exit()
         mc.reset_version_history()
-        rich.print("Sync filesystem with MongoDB...", end="")
-        db_data = load_from_mongodb(mc, subset=collections, verbose=args.verbose)
+        rich.print("Sync filesystem with Database...", end="")
+        db_data = load_from_database(mc, subset=collections, verbose=args.verbose)
         store_to_filesystem(db_data, folder, verbose=args.verbose, subset=collections, history=False)
-        db_data = load_from_mongodb(mc, subset=collections, verbose=args.verbose, history=True)
+        db_data = load_from_database(mc, subset=collections, verbose=args.verbose, history=True)
         store_to_filesystem(db_data, folder_hist, verbose=args.verbose, subset=collections, history=True)
         rich.print("[green]done!")
         exit()
@@ -227,12 +230,12 @@ if __name__ == "__main__":
     if args.get:
         init = time.time()
         rich.print(f"Getting all data from database {mc.database_name} and storing to {folder}...", end="")
-        db_data = load_from_mongodb(mc, subset=collections, verbose=args.verbose)
+        db_data = load_from_database(mc, subset=collections, verbose=args.verbose)
         store_to_filesystem(db_data, folder, verbose=args.verbose, subset=collections, history=False)
         rich.print("[green]ok!")
 
         rich.print(f"Getting all data from database {mc.history_database_name} and storing to {folder_hist}...", end="")
-        db_data = load_from_mongodb(mc, subset=collections, verbose=args.verbose, history=True)
+        db_data = load_from_database(mc, subset=collections, verbose=args.verbose, history=True)
         store_to_filesystem(db_data, folder_hist, verbose=args.verbose, subset=collections, history=True)
         rich.print("[green]ok!")
         rich.print(f"[green]done! took {1000*(time.time() - init):.03} msecs")
@@ -240,12 +243,12 @@ if __name__ == "__main__":
 
     diff = []  # list of elements to be updated
     if args.put or args.status:
-        db_data = load_from_mongodb(mc, subset=collections)
+        db_data = load_from_database(mc, subset=collections)
         fs_data = load_from_filesystem(folder, subset=collections)
         diff = compoare_fs_to_db(db_data, fs_data)
 
         # checking also historical data
-        db_data_hist = load_from_mongodb(mc, subset=collections, history=True)
+        db_data_hist = load_from_database(mc, subset=collections, history=True)
         fs_data_hist = load_from_filesystem(folder_hist, subset=collections, history=True)
 
     if args.put:
@@ -267,7 +270,7 @@ if __name__ == "__main__":
                 mc.get_document(collection, document_id)  # update the local document
                 replaced += 1
             elif action == "create":
-                mc.insert_document(collection, fs_data[collection][document_id], force=args.force, force_meta=force_meta)
+                mc.insert_document(collection, fs_data[collection][document_id], force=args.force)
                 inserted += 1
 
             elif action == "delete":

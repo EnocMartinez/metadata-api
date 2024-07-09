@@ -119,7 +119,7 @@ class DataCollector(LoggerSuperclass):
     def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp, time_end: pd.Timestamp,
                          fmt: str = "") -> DatasetObject:
         """
-        Generates a dataset based on its configuration stored in MongoDB
+        Generates a dataset based on its configuration stored in Metadata DB
         :param dataset: #id of the dataset
         :param service_name: Name of the service that will be used to export the dataset
         :param time_start: dataset time start
@@ -514,10 +514,10 @@ class DataCollector(LoggerSuperclass):
                                  default_data_mode="real-time", os_data_type="OceanSITES time-series data",
                                  tstart: str = "", tend: str = "") -> dict:
         """
-        This method returns the configuration required by the Metadata Harmonizer tool from the MongoDB
-        :param dataset: sensor dict from MongoDB database
-        :param sensor: sensor dict from MongoDB database
-        :param station: station dict from MongoDB database
+        This method returns the configuration required by the Metadata Harmonizer tool from the Metadata DB
+        :param dataset: sensor dict from Metadata DB database
+        :param sensor: sensor dict from Metadata DB database
+        :param station: station dict from Metadata DB database
         :param variable_ids: list of variables to be included in the dataset
         :param default_data_mode: Default data mode
         :param os_data_type: OceanSITES data type, probably by default time-series data

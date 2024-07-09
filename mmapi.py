@@ -68,28 +68,28 @@ def get_collection(collection: str):
     try:
         documents = app.mc.get_documents(collection)
     except LookupError:
-        return api_error(f"Collection not '{collection}', valid collection names {mc.collection_names}")
+        return api_error(f"Collection not '{collection}', valid collection names {app.mc.collection_names}")
     return Response(json.dumps(documents), status=200, mimetype="application/json")
 
 
-@app.route('/mmapi/v1.0/<path:collection>', methods=['POST'])
+@app.route('/mmapi/v1.0/<path:collection>', methods=['POST', 'PATCH'])
 def post_to_collection(collection: str):
     document = json.loads(request.data)
     app.log.debug(f"Checking if collection {collection} exists...")
     if collection not in app.mc.collection_names:
-        return api_error(f"Collection not '{collection}', valid collection names {mc.collection_names}")
+        return api_error(f"Collection not '{collection}', valid collection names {app.mc.collection_names}")
 
     if "#id" not in document.keys():
         return api_error(f"Field #id not found in document")
 
     document_id = document["#id"]
-    identifiers = app.mc.get_identifiers(collection)
-    if document_id in identifiers:
-        return api_error(f"Document with #id={document_id} already exists in collection '{collection}'")
+    # identifiers = app.mc.get_identifiers(collection)
+    # if document_id in identifiers:
+    #     return api_error(f"Document with #id={document_id} already exists in collection '{collection}'")
 
     app.log.info(f"Adding document {document_id} to collection '{collection}'")
     try:
-        inserted_document = app.mc.insert_document(collection, document)
+        inserted_document = app.mc.insert_document(collection, document, update=True)
     except Exception as e:
         return api_error(f"Unexpected error while inserting document: {e}", code=500)
 

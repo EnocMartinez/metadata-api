@@ -17,7 +17,7 @@ import traceback
 
 
 class Connection(LoggerSuperclass):
-    def __init__(self, host, port, db_name, db_user, db_password, timeout, logger, count):
+    def __init__(self, host, port, db_name, db_user, db_password, timeout, logger, count, autocommit=False):
         LoggerSuperclass.__init__(self, logger, f"PGCON{count}", colour=PRL)
         self.info("Creating connection")
         self.__host = host
@@ -33,6 +33,9 @@ class Connection(LoggerSuperclass):
         # Create a connection
         self.connection = psycopg2.connect(host=self.__host, port=self.__port, dbname=self.__name, user=self.__user,
                                            password=self.__pwd, connect_timeout=self.__timeout)
+        if autocommit:
+            self.connection.autocommit = autocommit
+
         self.cursor = self.connection.cursor()
         self.last_used = -1
 
@@ -46,7 +49,14 @@ class Connection(LoggerSuperclass):
         self.available = False
         if debug:
             self.debug(query)
-        self.cursor.execute(query)
+
+        if type(query) is tuple:
+            # If tuple assume that it has two parts
+            sql_query, data = query
+            self.cursor.execute(sql_query, data)
+        else:
+            self.cursor.execute(query)
+
         self.connection.commit()
         if fetch:
             resp = self.cursor.fetchall()
@@ -72,7 +82,7 @@ class PgDatabaseConnector(LoggerSuperclass):
     Interface to access a PostgresQL database
     """
 
-    def __init__(self, host, port, db_name, db_user, db_password, logger, timeout=5):
+    def __init__(self, host, port, db_name, db_user, db_password, logger, timeout=5, autocommit=False):
         LoggerSuperclass.__init__(self, logger, "PostgresQL")
         self.conn_count = 0
         self.__host = host
@@ -82,6 +92,7 @@ class PgDatabaseConnector(LoggerSuperclass):
         self.__pwd = db_password
         self.__timeout = timeout
         self.__logger = logger
+        self.autocommit = autocommit
 
         self.query_time = -1  # stores here the execution time of the last query
         self.db_initialized = False
@@ -89,13 +100,20 @@ class PgDatabaseConnector(LoggerSuperclass):
         self.max_connections = 50
 
         # Check for the constraints
+        self.get_available_connection()
 
     def new_connection(self) -> Connection:
         self.conn_count += 1
         c = Connection(self.__host, self.__port, self.__name, self.__user, self.__pwd, self.__timeout, self.__logger,
-                       self.conn_count)
+                       self.conn_count, autocommit=self.autocommit)
         self.connections.append(c)
         return c
+
+    def close(self):
+        for i in range(len(self.connections)):
+            self.info(f"Closing connectino {i}")
+            c = self.connections[i]
+            c.close()
 
     def get_available_connection(self):
         """
@@ -128,13 +146,13 @@ class PgDatabaseConnector(LoggerSuperclass):
             # most likely a duplicated key, raise it again
             c.connection.rollback()
             c.available = True  # set it to available
+            self.info(f"Query: {query}")
             self.error(f"Exception caught!:\n{traceback.format_exc()}")
             raise e
 
         except Exception as e:
             self.warning(f"Exception caught!:\n{traceback.format_exc()}")
             self.info(f"Query: {query}")
-            print(f"Query: {query}")
             self.error(f"Exception in exec_query {e}")
 
             if not ignore_errors:
@@ -199,3 +217,26 @@ class PgDatabaseConnector(LoggerSuperclass):
         if index_name not in pg_indexes:
             self.exec_query(query, fetch=False)
 
+    def check_if_table_exists(self, view_name):
+        """
+        Checks if a view already exists
+        :param view_name: database view to check if exists
+        :return: True if exists, False if it doesn't
+        """
+        # Select all from information_schema
+        query = "SELECT table_name FROM information_schema.tables"
+        df = self.dataframe_from_query(query)
+        table_names = df["table_name"].values
+        if view_name in table_names:
+            return True
+        return False
+
+    def check_if_database_exists(self, dbname) -> bool:
+        """
+        Checks if a database exists
+        :return: True/False
+        """
+        databases = self.list_from_query("SELECT datname FROM pg_database WHERE datistemplate = false;")
+        if dbname in databases:
+            return True
+        return False
