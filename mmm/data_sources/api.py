@@ -84,6 +84,31 @@ def strip_sta_elements(data: dict, delete=[]):
     return data
 
 
+def clean_dict(d):
+    """
+    Recursively remove all values that are empty strings, empty dictionaries,
+    or empty lists from the given dictionary, including nested fields.
+    """
+    if not isinstance(d, dict):
+        return d
+
+    cleaned_dict = {}
+    for key, value in d.items():
+        if isinstance(value, dict):
+            nested_dict = clean_dict(value)
+            if nested_dict:  # Only add non-empty dictionaries
+                cleaned_dict[key] = nested_dict
+        elif isinstance(value, list):
+            nested_list = [clean_dict(item) if isinstance(item, dict) else item for item in value]
+            nested_list = [item for item in nested_list if item not in ("", [], {})]
+            if nested_list:  # Only add non-empty lists
+                cleaned_dict[key] = nested_list
+        elif value not in ("", [], {}):
+            cleaned_dict[key] = value
+
+    return cleaned_dict
+
+
 def compare_sta_elements(element1, element2):
     """
     Compares two SensorThings elements
@@ -91,9 +116,9 @@ def compare_sta_elements(element1, element2):
     :param element2:
     :return: True/False
     """
-    __ignore_elements = ["Sensor", "ObservedProperty", "Thing", "resultTime", "phenomenonTime" , "observedArea"]
-    e1 = strip_sta_elements(element1, delete=__ignore_elements)
-    e2 = strip_sta_elements(element2, delete=__ignore_elements)
+    __ignore_elements = ["Sensor", "ObservedProperty", "Thing", "resultTime", "phenomenonTime", "observedArea"]
+    e1 = clean_dict(strip_sta_elements(element1, delete=__ignore_elements))
+    e2 = clean_dict(strip_sta_elements(element2, delete=__ignore_elements))
     if e1 == e2:
         return True
     return False

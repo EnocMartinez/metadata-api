@@ -129,15 +129,22 @@ def clear_temporal_files(folders: list):
     rich.print(f"Deleted {n} files")
 
 
-def compare_dicts(doc1: dict, doc2: dict) -> bool:
+def compare_dicts(doc1: dict, doc2: dict, metadata=False) -> bool:
     """
     Compares two dicts and returns True if there are differences, False if they are equal
+    If metadata is False, remove all metadata elements
+    :param doc1: dict1
+    :param doc2: dict2
+    :param metadata: flag that indicates if metadata should also be compared (default False)
+    :returns: True if dicts are equal, false if there are differences
     """
-    doc1_str = json.dumps(MetadataCollector.strip_metadata_fields(doc1))  # convert to string
-    doc2_str = json.dumps(MetadataCollector.strip_metadata_fields(doc2))
-    if doc1_str == doc2_str:  # compare strings
-        return False
-    return True
+    if not metadata:
+        # comparing without metadata
+        doc1 = MetadataCollector.strip_metadata_fields(doc1)
+        doc2 = MetadataCollector.strip_metadata_fields(doc2)
+        return doc1 == doc2
+
+    return doc1 == doc2
 
 
 def compoare_fs_to_db(db_data, fs_data) -> list:
@@ -153,7 +160,7 @@ def compoare_fs_to_db(db_data, fs_data) -> list:
             if doc_id not in db_data[collection].keys():
                 rich.print(f"[cyan]{collection} {doc_id} new document!")
                 diff.append({"collection": collection, "doc_id": doc_id, "action": "create"})
-            elif compare_dicts(db_data[collection][doc_id], fs_data[collection][doc_id]):
+            elif not compare_dicts(db_data[collection][doc_id], fs_data[collection][doc_id]):
                 rich.print(f"[green]{collection} {doc_id} modified!")
                 diff.append({"collection": collection, "doc_id": doc_id, "action": "replace"})
 

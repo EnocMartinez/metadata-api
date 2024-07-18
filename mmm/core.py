@@ -251,7 +251,7 @@ def propagate_metadata_to_sensorthings(mc: MetadataCollector, collections: str, 
                 lon = dep["position"]["longitude"]
                 depth = dep["position"]["depth"]
 
-                loc_name = f"Point lat={lat}, lon={lon}, depth={depth} meters"
+                loc_name = f"Location of {name} at lat={lat}, lon={lon}, depth={depth} meters"
                 loc_description = dep["description"]
                 location = Location(loc_name, loc_description, lat, lon, depth, things=[])
                 location.register(url, update=update, verbose=True)
@@ -263,6 +263,8 @@ def propagate_metadata_to_sensorthings(mc: MetadataCollector, collections: str, 
         rich.print(f"[green]Creating Datastreams for sensor {sensor['#id']}")
         sensor_name = sensor["#id"]
         sensor_deployments = get_sensor_deployments(mc, sensor["#id"])
+        if len(sensor_deployments) < 1:
+            raise ValueError(f"Sensor {sensor['#id']} does not have a deployment!")
         stations_processed = []
         for station, deployment_time in sensor_deployments:
             if station in stations_processed:
@@ -419,6 +421,11 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
         df = df.drop(dup_idx.index)
         df = df.reset_index()
         df = df.set_index("timestamp")
+
+    # Force qc in upper case -> TEMP_qc -> TEMP_QC
+    for col in df.columns:
+        if col.endswith("_qc"):
+            df = df.rename(columns={col: col.replace("_qc", "_QC")})
 
     db = SensorThingsApiDB(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
                                  psql_conf["password"], logging.getLogger(), timescaledb=True)

@@ -459,7 +459,6 @@ class MetadataCollector(LoggerSuperclass):
             author = self.default_author
 
         old_document = self.get_document(collection, document_id)  # getting old metadata
-        rich.print(old_document)
         metadata = {key: value for key, value in old_document.items() if key.startswith("#")}
         metadata["#version"] += 1
         metadata["#modificationDate"] = get_timestamp_string()
@@ -472,7 +471,6 @@ class MetadataCollector(LoggerSuperclass):
         contents = self.strip_metadata_fields(document)
         new_document = metadata  # start new document with metadata
         new_document.update(contents)  # add contents after metadata
-        rich.print(new_document)
 
         if contents == old_contents:
             if force:
@@ -731,6 +729,14 @@ class MetadataCollector(LoggerSuperclass):
                     w = f"{collection}:{doc['#id']} 'dataSource' in datasets root will be ignored!"
                     rich.print(f"[yellow]{w}")
                     warnings.append(w)
+
+            # Check deployments
+            deps = get_sensor_deployments(self, doc["#id"])
+            if len(deps) < 1:
+                w = f"{collection}:{doc['#id']} doesn't have any deployement!"
+                rich.print(f"[yellow]{w}")
+                warnings.append(w)
+
         return warnings
 
     def healthcheck(self, collections=None):
@@ -768,14 +774,17 @@ class MetadataCollector(LoggerSuperclass):
                 # Check if there are any warnings
                 warnings = self.__warning(col, doc, warnings)
 
+
+
+
         if warnings:
             self.info("Warning report")
-            [self.info(f"  {warning}") for warning in warnings]
+            [self.warning(f"  {warning}") for warning in warnings]
             self.warning(f"Got {len(warnings)} warnings!")
 
         if errors:
             self.info("Error report")
-            [self.info(f"  {error}") for error in errors]
+            [self.error(f"  {error}") for error in errors]
             self.error(f"[red]Got {len(errors)} errors!")
         else:
             self.info(f"  =) =) Congratulations! You have a healthy database (= (=\n")

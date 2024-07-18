@@ -89,7 +89,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     cls.sta_ts_url = line.split("=")[1].replace("\"", "")
                     break
 
-        os.makedirs("erddapData", mode=0o777)
+        os.makedirs("erddapData", mode=0o777, exist_ok=True)
         # Create volumes for all docker services
         with open("docker-compose.yaml") as f:
             docker_config = yaml.safe_load(f)

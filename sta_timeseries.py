@@ -28,8 +28,7 @@ import yaml
 from flask import Flask, request, Response
 from flask_basicauth import BasicAuth
 from flask_cors import CORS
-from mmm.common import setup_log, assert_dict, GRN, BLU, MAG, CYN, WHT, YEL, RED, NRM, RST, environment_from_file, \
-    LoggerSuperclass
+from mmm.common import setup_log, assert_dict, GRN, BLU, MAG, CYN, WHT, YEL, RED, NRM, RST, LoggerSuperclass
 import time
 import os
 import rich
@@ -37,12 +36,14 @@ from mmm import SensorThingsApiDB, init_metadata_collector_env
 import datetime
 import psycopg2
 from functools import wraps  # Import wraps here
+import dotenv
 
 app = Flask("SensorThings TimeSeries")
 CORS(app)
 
 basic_auth = BasicAuth(app)
 
+service_root = "/sta-timeseries/v1.1"
 
 def determine_auth_requirement():
     """
@@ -68,8 +69,6 @@ def conditional_basicauth():
                 return f(*args, **kwargs)
         return decorated_function
     return decorator
-
-
 
 
 def get_datastream_id(datastream: dict):
@@ -182,9 +181,8 @@ def expand_element(resp, parent_element, expanding_key, opts):
 
         observation_list = format_observation_list(list_data, foi_id, datastream_id, opts)
         datastream["Observations@iot.nextLink"] = generate_next_link(len(list_data), opts, datastream_id)
-        datastream["Observations@iot.navigatioinLink"] = sta_base_url + f"/Datastreams({datastream_id})/Observations"
+        datastream["Observations@iot.navigatioinLink"] = app.sta_base_url + f"/Datastreams({datastream_id})/Observations"
         datastream["Observations"] = observation_list
-
     return resp
 
 
@@ -252,7 +250,8 @@ def decode_expand_options(expand_string: str):
 
 
 def get_sta_request(request):
-    sta_url = f"{app.sta_base_url}{request.full_path}"
+    # https://my.dns.com/sta-timeseries/v1.1/something/else
+    sta_url = app.sta_get_url + request.full_path.replace(service_root, "")
     app.log.debug(f"Generic query, fetching {sta_url}")
     resp = requests.get(sta_url, auth=app.sta_auth)
     rich.print(f"[yellow]Getting STA: {sta_url}")
@@ -483,13 +482,15 @@ def generate_response(text, status=200, mimetype="application/json", headers={})
     Finals touch before sending the result, mainly replacing FROST url with our url
     """
     text = text.replace(app.sta_base_url, app.service_url)
+    app.log.info(f"frost base: {app.sta_base_url}")
+    app.log.info(f"stats base: {app.service_url}")
     response = Response(text, status, mimetype=mimetype)
     for key, value in headers.items():
         response.headers[key] = value
     return response
 
 
-@app.route('/<path:path>', methods=['GET'])
+@app.route(f'{service_root}/<path:path>', methods=['GET'])
 @conditional_basicauth()
 def generic_query(path):
     text, code = get_sta_request(request)
@@ -502,7 +503,8 @@ def generic_query(path):
         return process_sensorthings_response(request, resp)
 
 
-@app.route('/', methods=['GET'])
+@app.route(f'{service_root}/', methods=['GET'])
+@app.route(f'{service_root}', methods=['GET'])
 @conditional_basicauth()
 def generic():
     rich.print("[purple]Regular query, forward to SensorThings API")
@@ -516,7 +518,7 @@ def generic():
     return process_sensorthings_response(request, json_response)
 
 
-@app.route('/Observations(<int:observation_id>)', methods=['GET'])
+@app.route(f'{service_root}/Observations(<int:observation_id>)', methods=['GET'])
 @conditional_basicauth()
 def get_observation(observation_id):
     """
@@ -546,7 +548,7 @@ def get_observation(observation_id):
         return generate_response(json.dumps(error_message), 400, mimetype='application/json')
 
 
-@app.route('/Observations', methods=['GET'])
+@app.route(f'{service_root}/Observations', methods=['GET'])
 @conditional_basicauth()
 def get_observations():
     """
@@ -586,13 +588,13 @@ def get_observations():
         return generate_response(json.dumps(error_message), 400, mimetype='application/json')
 
 
-@app.route('/Sensors(<int:sensor_id>)/Datastreams(<int:datastream_id>)/Observations', methods=['GET'])
+@app.route(f'{service_root}/Sensors(<int:sensor_id>)/Datastreams(<int:datastream_id>)/Observations', methods=['GET'])
 @conditional_basicauth()
 def sensors_datastreams_observations(sensor_id, datastream_id):
     return datastreams_observations_get(datastream_id)
 
 
-@app.route('/Datastreams(<int:datastream_id>)', methods=['GET'])
+@app.route(f'{service_root}/Datastreams(<int:datastream_id>)', methods=['GET'])
 @conditional_basicauth()
 def just_datastreams(datastream_id):
     rich.print(f"[green]Got a datastream request: {request.path}")
@@ -601,7 +603,7 @@ def just_datastreams(datastream_id):
     return process_sensorthings_response(request, resp)
 
 
-@app.route('/Datastreams(<int:datastream_id>)/Observations', methods=['GET'])
+@app.route(f'{service_root}/Datastreams(<int:datastream_id>)/Observations', methods=['GET'])
 @conditional_basicauth()
 def datastreams_observations_get(datastream_id, opts=None):
     try:
@@ -663,13 +665,13 @@ def datastreams_observations_get(datastream_id, opts=None):
         return generate_response(json.dumps(error_message), 500, mimetype='application/json')
 
 
-@app.route('/Datastreams(<int:datastream_id>)/Observations', methods=['POST'])
+@app.route(f'{service_root}/Datastreams(<int:datastream_id>)/Observations', methods=['POST'])
 @basic_auth.required
 def datastreams_observations_post(datastream_id):
     data = json.loads(request.data.decode())
     return observation_post_handler(data, datastream_id)
 
-@app.route('/Observations', methods=['POST'])
+@app.route(f'{service_root}/Observations', methods=['POST'])
 @basic_auth.required
 def observations_post():
     data = json.loads(request.data.decode())
@@ -831,12 +833,12 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
 
     if env_file:
         # override os.environ with file enironment vars
-        environ = environment_from_file(env_file)
-    else:
-        environ = os.environ
+        dotenv.load_dotenv(env_file)
 
-    required_env_variables = ["STA_DB_HOST", "STA_DB_USER", "STA_DB_PORT", "STA_DB_PASSWORD", "STA_DB_NAME", "STA_URL",
-                              "STA_TS_ROOT_URL", "STA_TS_USER", "STA_TS_PASSWORD", "STA_DB_BASICAUTH"]
+    environ = os.environ
+    required_env_variables = ["STA_DB_HOST", "STA_DB_USER", "STA_DB_PORT", "STA_DB_PASSWORD", "STA_DB_NAME",
+                              "STA_BASE_URL", "STA_URL_GET", "STA_TS_ROOT_URL", "STA_TS_USER", "STA_TS_PASSWORD",
+                              "STA_DB_BASICAUTH"]
 
     for key in required_env_variables:
         if key not in os.environ.keys():
@@ -848,7 +850,10 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
     db_password = environ["STA_DB_PASSWORD"]
     db_host = environ["STA_DB_HOST"]
     app.service_url = environ["STA_TS_ROOT_URL"]
-    app.sta_base_url = environ["STA_URL"]
+
+    app.sta_base_url = environ["STA_BASE_URL"]  # URL to get SensorThings Data
+    app.sta_get_url = environ["STA_URL_GET"]
+
 
     if environ["STA_DB_BASICAUTH"].lower() == "true":
         app.sta_auth = (environ["STA_TS_USER"], environ["STA_TS_PASSWORD"])
@@ -868,12 +873,13 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
         app.log.setLevel(logging.DEBUG)
         app.log.debug("Setting log to DEBUG level")
 
-    app.log.info(f"Service URL: {app.service_url}")
-    app.log.info(f"SensorThings URL: {app.sta_base_url}")
+    app.log.info(f"Service sta_ts_url: {app.service_url}")
+    app.log.info(f"SensorThings sta_base_url: {app.sta_base_url}")
 
     app.log.info("Setting up db connector")
     app.db = SensorThingsApiDB(db_host, db_port, db_name, db_user, db_password, app.log, timescaledb=True)
     app.log.info("Getting sensor list...")
+    app.log.info(f"service root is {service_root}")
     app.run(host="0.0.0.0", debug=False, port=port)
 
 

@@ -236,7 +236,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
 
         if self.host != "localhost" and self.host != "127.0.0.1":
             t = time.time()
-            rich.print("rsync files to remote server...", end="")
+            rich.print(f"rsync files to remote server '{self.host}'...", end="")
             rsync_files(self.host, tmp_folder, files)
             rich.print(f"[green]done![/green] took {time.time() - t:.02f} s")
 

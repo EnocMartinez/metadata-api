@@ -406,22 +406,6 @@ def assert_dict(conf: dict, required_keys: dict, verbose=False):
             raise AssertionError(msg)
 
 
-def environment_from_file(filename):
-    with open(filename) as f:
-        lines = f.readlines()
-
-    lines = [line.strip() for line in lines]
-    environ = os.environ
-    for line in lines:
-        # remove comment
-        line = line.split("#")[0]
-        if "=" in line:
-            key, value = line.split("=")
-            value = value.replace("\'", "").replace("\"", "")
-            environ[key] = value
-    return environ
-
-
 def validate_schema(doc: dict, schema: dict, errors: list, verbose=False) -> list:
     if "$id" not in schema.keys():
         raise ValueError("Schema not valid!! missing $id field")
