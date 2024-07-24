@@ -45,6 +45,7 @@ basic_auth = BasicAuth(app)
 
 service_root = "/sta-timeseries/v1.1"
 
+
 def determine_auth_requirement():
     """
     :return: True/False
@@ -52,6 +53,7 @@ def determine_auth_requirement():
     if app.sta_auth:
         return True
     return False
+
 
 def conditional_basicauth():
     """
@@ -254,7 +256,6 @@ def get_sta_request(request):
     sta_url = app.sta_get_url + request.full_path.replace(service_root, "")
     app.log.debug(f"Generic query, fetching {sta_url}")
     resp = requests.get(sta_url, auth=app.sta_auth)
-    rich.print(f"[yellow]Getting STA: {sta_url}")
     code = resp.status_code
     text = resp.text.replace(app.sta_base_url, app.service_url)  # hide original URL
     return text, code
@@ -481,9 +482,9 @@ def generate_response(text, status=200, mimetype="application/json", headers={})
     """
     Finals touch before sending the result, mainly replacing FROST url with our url
     """
+    if isinstance(text, dict):
+        text = json.dumps(text)
     text = text.replace(app.sta_base_url, app.service_url)
-    app.log.info(f"frost base: {app.sta_base_url}")
-    app.log.info(f"stats base: {app.service_url}")
     response = Response(text, status, mimetype=mimetype)
     for key, value in headers.items():
         response.headers[key] = value
@@ -517,6 +518,16 @@ def generic():
 
     return process_sensorthings_response(request, json_response)
 
+
+@app.route(f'/{service_root.split("/")[1]}', methods=['GET'])
+@app.route(f'/{service_root.split("/")[1]}/', methods=['GET'])
+@conditional_basicauth()
+def no_version():
+    d = {
+        "success": False,
+        "message": f"No API version found, try {request.url}/v1.1"
+    }
+    return generate_response(d)
 
 @app.route(f'{service_root}/Observations(<int:observation_id>)', methods=['GET'])
 @conditional_basicauth()
@@ -837,8 +848,12 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
 
     environ = os.environ
     required_env_variables = ["STA_DB_HOST", "STA_DB_USER", "STA_DB_PORT", "STA_DB_PASSWORD", "STA_DB_NAME",
-                              "STA_BASE_URL", "STA_URL_GET", "STA_TS_ROOT_URL", "STA_TS_USER", "STA_TS_PASSWORD",
-                              "STA_DB_BASICAUTH"]
+                              "STA_BASE_URL", "STA_URL_GET", "STA_TS_ROOT_URL", "STA_DB_BASICAUTH"]
+
+    # If basicauth is active, user and password are also required!
+    if "STA_DB_BASICAUTH" in os.environ.keys() and os.environ["STA_DB_BASICAUTH"].lower() == "true":
+        app.log.info("BasicAuth is activated")
+        required_env_variables += ["STA_TS_USER", "STA_TS_PASSWORD"]
 
     for key in required_env_variables:
         if key not in os.environ.keys():
@@ -853,21 +868,23 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
 
     app.sta_base_url = environ["STA_BASE_URL"]  # URL to get SensorThings Data
     app.sta_get_url = environ["STA_URL_GET"]
-
+    app.log.info(f"SensorThings Base URL: {app.sta_base_url}")
+    app.log.info(f"SensorThings Get URL: {app.sta_get_url}")
 
     if environ["STA_DB_BASICAUTH"].lower() == "true":
         app.sta_auth = (environ["STA_TS_USER"], environ["STA_TS_PASSWORD"])
+        app.config['BASIC_AUTH_USERNAME'] = os.environ["STA_TS_USER"]
+        app.config['BASIC_AUTH_PASSWORD'] = os.environ["STA_TS_PASSWORD"]
+
+        print_pwd = "*" * len(app.config['BASIC_AUTH_PASSWORD'][:-4])
+        print_pwd += app.config['BASIC_AUTH_PASSWORD'][-4:]
+        app.log.info(f"STA User: '{app.config['BASIC_AUTH_USERNAME']}'")
+        app.log.info(f"STA password: '{print_pwd}'")
+
     elif environ["STA_DB_BASICAUTH"].lower() == "false":
         app.sta_auth = ()
     else:
         raise ValueError(f"Expected true or false, got {environ['STA_DB_BASICAUTH']}")
-
-    app.config['BASIC_AUTH_USERNAME'] = os.environ["STA_TS_USER"]
-    app.config['BASIC_AUTH_PASSWORD'] = os.environ["STA_TS_PASSWORD"]
-    print_pwd = "*" * int(len(app.config['BASIC_AUTH_PASSWORD'][-4]))
-    print_pwd += app.config['BASIC_AUTH_PASSWORD'][-4:]
-    rich.print(f"STA User: '{ app.config['BASIC_AUTH_USERNAME']}'")
-    rich.print(f"STA password: '{print_pwd}'")
 
     if "STA_TS_DEBUG" in os.environ.keys():
         app.log.setLevel(logging.DEBUG)
@@ -875,8 +892,7 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
 
     app.log.info(f"Service sta_ts_url: {app.service_url}")
     app.log.info(f"SensorThings sta_base_url: {app.sta_base_url}")
-
-    app.log.info("Setting up db connector")
+    app.log.info("Setting up DB connector")
     app.db = SensorThingsApiDB(db_host, db_port, db_name, db_user, db_password, app.log, timescaledb=True)
     app.log.info("Getting sensor list...")
     app.log.info(f"service root is {service_root}")

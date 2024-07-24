@@ -8,6 +8,4 @@ echo "Building image with tag: $tag"
 echo "Currently in path: $(pwd)"
 
 docker build --no-cache -t "${tag}" -f build/sta-timeseries/Dockerfile .
-
-
-#docker push "${tag}"
+docker push "${tag}"

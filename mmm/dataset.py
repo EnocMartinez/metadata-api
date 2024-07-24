@@ -17,12 +17,13 @@ from .schemas import dataset_exporter_conf, mmm_schemas
 from .fileserver import FileServer, send_file
 from emso_metadata_harmonizer import erddap_config
 import time
-from mmm.common import validate_schema
+from mmm.common import validate_schema, LoggerSuperclass, CYN, GRN, assert_type
+import logging
 
 
-class DatasetObject:
+class DatasetObject(LoggerSuperclass):
     def __init__(self, conf: dict, filename: str, service_name: str, tstart: pd.Timestamp | str, tend: pd.Timestamp | str,
-                 fmt: str):
+                 fmt: str, log: logging.Logger):
         """
         This object contains all the metadata related to a dataset (or data file) and provides methods to deliver,
         update it.
@@ -34,8 +35,13 @@ class DatasetObject:
         :param tend: time end
         :param fmt: export format (by default format in conf)
         """
-        assert type(conf) is dict
+        self.log = log
+        LoggerSuperclass.__init__(self, log, "Dataset", colour=CYN)
+
+        assert_type(conf, dict)
         validate_schema(conf, mmm_schemas["datasets"], [])
+
+        assert os.path.isfile(filename), f"file '{filename}' does not exist!"
 
         # Convert strings
         if type(tstart) is str:
@@ -45,6 +51,8 @@ class DatasetObject:
 
         assert type(tstart) is pd.Timestamp
         assert type(tend) is pd.Timestamp
+
+        self.info(f"Creating dataset from {tstart} to {tend}")
 
         self.filename = filename
         self.conf = conf
@@ -65,7 +73,7 @@ class DatasetObject:
         # Store the configuration for all export services, we don't know yet to which service the data object
         # will be delivered.
         config = conf["export"][service_name]
-        self.exporter = DataExporter(config)
+        self.exporter = DataExporter(config, self.dataset_id, self.log)
 
         self.delivered = False  # will be set to True once the data object has been sent
 
@@ -89,7 +97,6 @@ class DatasetObject:
 
         if self.delivered:
             raise ValueError("Dataset already delivered!")
-
         exporter = self.exporter
         self.url = exporter.deliver_dataset(self.filename, self.tstart, fileserver=fileserver)
         self.delivered = True
@@ -152,16 +159,20 @@ class DatasetObject:
         return string
 
 
-class DataExporter:
-    def __init__(self, conf):
+class DataExporter(LoggerSuperclass):
+    def __init__(self, conf, dataset_id, log):
         """
         Class to export datasets from a datasource and deliver them to the proper service
         """
+        LoggerSuperclass.__init__(self, log, "Exporter", colour=GRN)
         jsonschema.validate(conf, schema=dataset_exporter_conf)
         self.period = conf["period"]
         self.host = conf["host"]
         self.format = conf["format"]
-        self.path = conf["path"]
+        if dataset_id not in conf["path"]:
+            self.path = os.path.join(conf["path"], dataset_id)
+        else:
+            self.path = conf["path"]
 
     def deliver_dataset(self, filename, timestamp: pd.Timestamp, fileserver: FileServer, url_required=True)->str:
         """
@@ -173,6 +184,8 @@ class DataExporter:
         if fileserver:
             assert type(fileserver) is FileServer, "Expected FileServer object"
             assert fileserver.host == self.host, "DataExporter and FileServer have different hosts, not implemented"
+
+        self.info(f"Delivering to {self.host}:{self.path}")
 
         assert type(filename) is str
         assert type(timestamp) is pd.Timestamp

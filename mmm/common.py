@@ -314,7 +314,7 @@ def detect_common_path(paths):
     """
     Returns the common prefix in a list of strings
     """
-
+    rich.print(paths)
     path_splits = [p.split("/") for p in paths]  # list of lists of paths
     i = -1
     loop = True
@@ -453,4 +453,22 @@ def retrieve_url(url, output="", attempts=3, timeout=5):
         raise exc
 
 
+def assert_type(obj, valid_type):
+    """
+    Asserts that obj is of type <valid_type>
+    :param obj:  any object
+    :param valid_type:  any type
+    """
 
+    assert isinstance(obj, valid_type), f"Expected {valid_type}, but got {type(obj)} instead"
+
+
+def assert_types(obj, valid_types):
+    """
+    Asserts that obj is of type <valid_type>
+    :param obj:  any object
+    :param valid_type:  any type
+    """
+    valid_string = ", ".join(str(valid_types))
+    valid_string = valid_string.replace("<class ", "").replace(">", "")
+    assert type(obj) in valid_types, f"Expected on of {valid_string}, but got {type(obj)} instead"

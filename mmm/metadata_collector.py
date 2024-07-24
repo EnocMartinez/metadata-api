@@ -332,7 +332,6 @@ class MetadataCollector(LoggerSuperclass):
         :param document: json doc to be inserted
         :param author: people #id of the author (if not set the default author will be set)
         :param force: insert even if the document fails the validation
-        :param force_meta: insert the document metadata as is (by default new metadata is generated)
         :param update: if set update the document if a previous version existed
         :return: document with metadata
         """
@@ -344,7 +343,6 @@ class MetadataCollector(LoggerSuperclass):
         if collection not in self.collection_names:
             raise ValueError(f"Collection {collection} not valid!")
 
-        print(self.get_identifiers(collection))
         if document["#id"] in self.get_identifiers(collection):
             if update:
                 self.warning(f"Document '{document['#id']}' already exists! udpating")
@@ -737,6 +735,13 @@ class MetadataCollector(LoggerSuperclass):
                 rich.print(f"[yellow]{w}")
                 warnings.append(w)
 
+        if collection == "datasets":
+            if "export" in doc.keys():
+                wrong_export_keys = ["host", "periodicity", "period", "host"]
+                for k in wrong_export_keys:
+                    if k in doc["export"].keys():
+                        w = f"{collection}:{doc['#id']} includes wrong key '{k}'"
+                        warnings.append(w)
         return warnings
 
     def healthcheck(self, collections=None):
@@ -773,8 +778,6 @@ class MetadataCollector(LoggerSuperclass):
 
                 # Check if there are any warnings
                 warnings = self.__warning(col, doc, warnings)
-
-
 
 
         if warnings:

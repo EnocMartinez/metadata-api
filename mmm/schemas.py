@@ -386,7 +386,8 @@ __datasets = {
             "required": ["@projects"]
         }
     },
-    "required": ["title", "summary", "@stations", "@sensors", "dataType", "dataSource", "contacts", "dataSourceOptions"]
+    "required": ["title", "summary", "@stations", "@sensors", "dataType", "dataSource", "contacts", "dataSourceOptions",
+                 "export"]
 }
 
 __activities = {

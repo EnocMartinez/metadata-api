@@ -187,11 +187,11 @@ if __name__ == "__main__":
     argparser.add_argument("-m", "--force-metadata", help="Force the metadata as is in the document", action="store_true")
 
     args = argparser.parse_args()
-    log = setup_log("log")
+    log = setup_log("metamanager")
     with open(args.secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
     print("init...")
-    mc = init_metadata_collector(secrets)
+    mc = init_metadata_collector(secrets, log=log)
 
     db_name = "metadata"
     db_name_hist = db_name + "_hist"

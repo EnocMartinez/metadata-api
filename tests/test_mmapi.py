@@ -117,7 +117,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         run_subprocess("docker compose up -d --build", fail_exit=True)
 
         log.info("Setup Metadata Collector...")
-        cls.mc = init_metadata_collector(conf)
+        cls.mc = init_metadata_collector(conf, log=log)
         cls.log = log
         log.info("Setup Data Collector...")
         cls.dc = init_data_collector(conf, log, mc=cls.mc)
@@ -1015,14 +1015,14 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "erddap": {
                     "host": "localhost",
                     "fileTreeLevel": "monthly",
-                    "path": "./datasets/obsea_ctd_full",
+                    "path": "./datasets",
                     "period": "daily",
                     "format": "netcdf"
                 },
                 "fileserver": {
                     "host": "localhost",
                     "fileTreeLevel": "none",
-                    "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
+                    "path": "/var/tmp/mmapi/volumes/files/datasets",
                     "period": "yearly",
                     "format": "netcdf"
                 }
@@ -1067,7 +1067,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "export": {
                 "erddap": {
                     "host": "localhost",
-                    "path": "./datasets/obsea_ctd_full",
+                    "path": "./datasets",
                     "period": "daily",
                     "format": "netcdf"
                 },
@@ -1238,7 +1238,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         """Ingesting average timeseries data using the API"""
         # Generate sine wave values
         frequency = 1
-        dates = pd.date_range(start='2023-01-01', end="2023-01-31", freq='100s')
+        dates = pd.date_range(start='2023-01-01', end="2023-03-31", freq='100s')
         tvector = np.arange(0, len(dates)) / 1000
         # Create a pandas DataFrame
         df = pd.DataFrame({
@@ -1747,92 +1747,98 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         os.makedirs("datasets", exist_ok=True)
         # Export CSV
         dataset_id = "obsea_ctd_full"
-        csv_dataset = self.dc.generate_dataset(dataset_id, "fileserver", "2020-01-01", "2021-01-01", fmt="csv")
-        csv_dataset.deliver(fileserver=self.dc.fileserver)
-        print(csv_dataset)
+        csv_datasets = self.dc.generate_dataset(dataset_id, "fileserver", "2020-01-01", "2021-01-01", fmt="csv")
+        for csv_dataset in csv_datasets:
+            csv_dataset.deliver(fileserver=self.dc.fileserver)
+            print(csv_dataset)
         self.assertTrue(check_url(csv_dataset.url))
 
         self.dc.upload_datafile_to_ckan(self.ckan, csv_dataset)
 
         # Export NetCDF
-        nc_dataset = self.dc.generate_dataset("obsea_ctd_full", "fileserver", "2020-01-01", "2030-01-01")
-        nc_dataset.deliver(fileserver=self.dc.fileserver)
-        self.assertTrue(check_url(nc_dataset.url))
-        self.dc.upload_datafile_to_ckan(self.ckan, nc_dataset)
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", "2020-01-01", "2020-02-01")
+        for nc_dataset in nc_datasets:
+            nc_dataset.deliver(fileserver=self.dc.fileserver)
+            self.assertTrue(check_url(nc_dataset.url))
+            self.dc.upload_datafile_to_ckan(self.ckan, nc_dataset)
 
         # Force error in format
         # Export NetCDF
         with self.assertRaises(AssertionError):
             self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-01-01", fmt="potato")
 
-        zip_dataset = self.dc.generate_dataset("IPC608_pics", "fileserver", "2020-01-01", "2030-01-01")
-        zip_dataset.deliver(self.dc.fileserver)
-
-        self.assertTrue(check_url(zip_dataset.url))
-        self.dc.upload_datafile_to_ckan(self.ckan, zip_dataset)
+        zip_datasets = self.dc.generate_dataset("IPC608_pics", "fileserver", "2020-01-01", "2020-02-01")
+        for zip_dataset in zip_datasets:
+            zip_dataset.deliver(self.dc.fileserver)
+            self.assertTrue(check_url(zip_dataset.url))
+            self.dc.upload_datafile_to_ckan(self.ckan, zip_dataset)
 
     def test_80_config_erddap(self):
         """creates a dataset and upload it to ERDDAP"""
-        nc_dataset = self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-01-01")
-        nc_dataset.deliver()
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2020-02-01")
+        for nc_dataset in nc_datasets:
+            nc_dataset.deliver()
 
-        # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
-        data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
-        nc_dataset.configure_erddap("conf/datasets.xml", data_path)
-        nc_dataset.reload_erddap_dataset("erddapData")
-        self.info("Wait 5 seconds for ERDDAP to reload...")
-        time.sleep(5)
-        # Now get ERDDAP data!
-        erddap_dataset = "mydataset.csv"
-        dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
-        self.info(f"Downloading dataset from erddap: {dataset_url}")
-        df = pd.read_csv(erddap_dataset)
+            # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
+            data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
+            nc_dataset.configure_erddap("conf/datasets.xml", data_path)
+            nc_dataset.reload_erddap_dataset("erddapData")
+            self.info("Wait 5 seconds for ERDDAP to reload...")
+            time.sleep(5)
+            # Now get ERDDAP data!
+            erddap_dataset = "mydataset.csv"
+            dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
+            self.info(f"Downloading dataset from erddap: {dataset_url}")
+            df = pd.read_csv(erddap_dataset)
 
     def test_80_config_erddap_with_daily_data(self):
         """creates a dataset with daily files and upload it to ERDDAP"""
-        nc_dataset = self.dc.generate_dataset("obsea_ctd_30min", "erddap", "2020-01-01", "2030-01-01")
-        nc_dataset.deliver()
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_30min", "erddap", "2022-01-01", "2022-02-01")
+        for nc_dataset in nc_datasets:
+            nc_dataset.deliver()
 
-        # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
+            # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
         data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
         nc_dataset.configure_erddap("conf/datasets.xml", data_path)
         nc_dataset.reload_erddap_dataset("erddapData")
 
-        # Now get ERDDAP data!
+            # Now get ERDDAP data!
         erddap_dataset = "mydataset.csv"
         dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
         self.info(f"Downloading dataset from erddap: {dataset_url}")
         retrieve_url(dataset_url, output=erddap_dataset)
-        pd.read_csv(erddap_dataset)
+        df = pd.read_csv(erddap_dataset)
 
-        datasets = self.dc.generate_dataset_tree("obsea_ctd_30min", "erddap", "2022-01-01", "2022-01-01")
+
+        datasets = self.dc.generate_dataset("obsea_ctd_30min", "erddap", "2022-01-01", "2022-01-01")
         for dataset in datasets:
             dataset.deliver()
 
 
     @classmethod
     def tearDownClass(cls):
-        cls.log.info("stopping containers")
-        run_subprocess("docker compose down")
-        rich.print("Deleting temporal docker volumes...")
-        for volume in cls.docker_volumes:
-            if os.path.isfile(volume):
-                continue  # ignore volume files
-
-            for f in file_list(volume):
-                os.remove(f)
-
-            # now remove any subdirs
-            subdir_list = dir_list(volume)
-            subdir_list = list(reversed(sorted(subdir_list)))
-            for subdir in subdir_list:
-                if os.path.isfile(subdir):
-                    raise ValueError("This should not happen!")
-                os.rmdir(subdir)
-
-        for volume in cls.docker_volumes:
-            if os.path.isdir(volume):
-                os.rmdir(volume)
+        pass
+        # cls.log.info("stopping containers")
+        # run_subprocess("docker compose down")
+        # rich.print("Deleting temporal docker volumes...")
+        # for volume in cls.docker_volumes:
+        #     if os.path.isfile(volume):
+        #         continue  # ignore volume files
+        #
+        #     for f in file_list(volume):
+        #         os.remove(f)
+        #
+        #     # now remove any subdirs
+        #     subdir_list = dir_list(volume)
+        #     subdir_list = list(reversed(sorted(subdir_list)))
+        #     for subdir in subdir_list:
+        #         if os.path.isfile(subdir):
+        #             raise ValueError("This should not happen!")
+        #         os.rmdir(subdir)
+        #
+        # for volume in cls.docker_volumes:
+        #     if os.path.isdir(volume):
+        #         os.rmdir(volume)
 
 
 if __name__ == "__main__":
