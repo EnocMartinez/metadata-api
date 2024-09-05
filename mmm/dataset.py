@@ -185,7 +185,7 @@ class DataExporter(LoggerSuperclass):
             assert type(fileserver) is FileServer, "Expected FileServer object"
             assert fileserver.host == self.host, "DataExporter and FileServer have different hosts, not implemented"
 
-        self.info(f"Delivering to {self.host}:{self.path}")
+        self.info(f"Delivering {os.path.basename(filename)} to {self.host}:{self.path}")
 
         assert type(filename) is str
         assert type(timestamp) is pd.Timestamp

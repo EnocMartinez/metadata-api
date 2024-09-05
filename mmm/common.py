@@ -467,8 +467,9 @@ def assert_types(obj, valid_types):
     """
     Asserts that obj is of type <valid_type>
     :param obj:  any object
-    :param valid_type:  any type
+    :param valid_types:  list of types
     """
-    valid_string = ", ".join(str(valid_types))
+    assert isinstance(valid_types, list), "valid_types should be a list of types!"
+    valid_string = ", ".join([str(t) for t in valid_types])
     valid_string = valid_string.replace("<class ", "").replace(">", "")
     assert type(obj) in valid_types, f"Expected on of {valid_string}, but got {type(obj)} instead"

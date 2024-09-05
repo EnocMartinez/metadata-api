@@ -844,19 +844,21 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
 
     if env_file:
         # override os.environ with file enironment vars
-        dotenv.load_dotenv(env_file)
+        rich.print(f"[purple]loading {env_file}")
+        environ = dotenv.dotenv_values(env_file)
+    else:
+        environ = os.environ
 
-    environ = os.environ
     required_env_variables = ["STA_DB_HOST", "STA_DB_USER", "STA_DB_PORT", "STA_DB_PASSWORD", "STA_DB_NAME",
                               "STA_BASE_URL", "STA_URL_GET", "STA_TS_ROOT_URL", "STA_DB_BASICAUTH"]
 
     # If basicauth is active, user and password are also required!
-    if "STA_DB_BASICAUTH" in os.environ.keys() and os.environ["STA_DB_BASICAUTH"].lower() == "true":
+    if "STA_DB_BASICAUTH" in environ.keys() and environ["STA_DB_BASICAUTH"].lower() == "true":
         app.log.info("BasicAuth is activated")
         required_env_variables += ["STA_TS_USER", "STA_TS_PASSWORD"]
 
     for key in required_env_variables:
-        if key not in os.environ.keys():
+        if key not in environ.keys():
             raise EnvironmentError(f"Environment variable '{key}' not set!")
 
     db_name = environ["STA_DB_NAME"]
@@ -866,6 +868,11 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
     db_host = environ["STA_DB_HOST"]
     app.service_url = environ["STA_TS_ROOT_URL"]
 
+    print(f"--> db_user: {db_user}")
+    print(f"--> db_password: {db_password}")
+    print(f"--> db_host: {db_host}")
+
+
     app.sta_base_url = environ["STA_BASE_URL"]  # URL to get SensorThings Data
     app.sta_get_url = environ["STA_URL_GET"]
     app.log.info(f"SensorThings Base URL: {app.sta_base_url}")
@@ -873,8 +880,8 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
 
     if environ["STA_DB_BASICAUTH"].lower() == "true":
         app.sta_auth = (environ["STA_TS_USER"], environ["STA_TS_PASSWORD"])
-        app.config['BASIC_AUTH_USERNAME'] = os.environ["STA_TS_USER"]
-        app.config['BASIC_AUTH_PASSWORD'] = os.environ["STA_TS_PASSWORD"]
+        app.config['BASIC_AUTH_USERNAME'] = environ["STA_TS_USER"]
+        app.config['BASIC_AUTH_PASSWORD'] = environ["STA_TS_PASSWORD"]
 
         print_pwd = "*" * len(app.config['BASIC_AUTH_PASSWORD'][:-4])
         print_pwd += app.config['BASIC_AUTH_PASSWORD'][-4:]
@@ -886,7 +893,7 @@ def run_sta_timeseries_api(env_file="", log=None, port=5000):
     else:
         raise ValueError(f"Expected true or false, got {environ['STA_DB_BASICAUTH']}")
 
-    if "STA_TS_DEBUG" in os.environ.keys():
+    if "STA_TS_DEBUG" in environ.keys():
         app.log.setLevel(logging.DEBUG)
         app.log.debug("Setting log to DEBUG level")
 
