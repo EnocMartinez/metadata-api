@@ -10,7 +10,6 @@ created: 24/1/23
 import os
 from argparse import ArgumentParser
 import yaml
-
 import mmm.schemas
 from mmm.metadata_collector import MetadataCollector, init_metadata_collector
 from mmm.common import setup_log, file_list
@@ -87,9 +86,10 @@ if __name__ == "__main__":
     # Update the id in the document
     doc["#id"] = new
     # Manually insert the document
-    mc.db[collection].insert_one(doc.copy())  # use copy to avoid pymongo to modify original dict
+    ValueError("Unimplemented for PostgresQL!")
+    #mc.db[collection].insert_one(doc.copy())  # use copy to avoid pymongo to modify original dict
     # Insert in history
-    mc.db_history[collection].insert_one(doc.copy())  # use copy to avoid pymongo to modify original dict
+    #mc.db_history[collection].insert_one(doc.copy())  # use copy to avoid pymongo to modify original dict
 
     # Now check the schemas to get
     schemas = mmm.schemas.mmm_schemas

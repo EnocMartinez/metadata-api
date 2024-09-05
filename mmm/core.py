@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This file contains high-level functions that connects MongoDB metadata with other services such as CKAN, ERDDAP, etc.
+This file contains high-level functions that connects metadata DB with other services such as CKAN, ERDDAP, etc.
 
 author: Enoc Martínez
 institution: Universitat Politècnica de Catalunya (UPC)
@@ -15,7 +15,7 @@ import rich
 from mmm.common import load_fields_from_dict, YEL, RST
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
 from mmm.data_sources.api import Sensor, Thing, ObservedProperty, FeatureOfInterest, Location, Datastream, \
-    HistoricalLocation
+    HistoricalLocation, set_sta_basic_auth
 from mmm.metadata_collector import get_station_coordinates, get_station_history, get_sensor_deployments
 from mmm.processes import average_process, inference_process
 from mmm.schemas import mmapi_data_types
@@ -36,9 +36,9 @@ def get_properties(doc: dict, properties: list) -> dict:
     return data
 
 
-def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
+def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
     """
-    Propagates metadata in MongoDB to CKAN
+    Propagates metadata from metadata database to CKAN
 
     :param mc: MetadataCollector
     :param ckan: CkanClient object
@@ -57,7 +57,7 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
     if len(collections) == 0:
         collections = mc.collection_names
 
-    rich.print("Propagating data from MongoDB to CKAN")
+    rich.print("Propagating data from Metadata DB to CKAN")
     rich.print(f"Using the following collections: {collections}")
 
     # Institutions
@@ -171,19 +171,24 @@ def propagate_mongodb_to_ckan(mc: MetadataCollector, ckan: CkanClient, collectio
                                   groups=groups)
 
 
-def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, url, update=True, authentication=""):
+def propagate_metadata_to_sensorthings(mc: MetadataCollector, collections: str, url, update=True, auth=()):
     """
     Propagates info at MetadataCollctor the SensorThings API
     """
 
     assert (type(mc) is MetadataCollector)
     assert (type(collections) is list)
+
+    if auth:
+        set_sta_basic_auth(auth[0], auth[1])
+
     # Stations as thing
     if "all" in collections or collections == []:
         collections = mc.collection_names
-    rich.print(f"Propagating collections {collections}")
+    mc.info(f"Propagating collections {collections}")
+    mc.info(f"Using URL: {url}")
 
-    sensor_ids = {}  # key: mongodb #id, value: sensorthings ID
+    sensor_ids = {}  # key: metadata #id, value: sensorthings ID
     things_ids = {}
     location_ids = {}
     obs_props_ids = {}
@@ -246,7 +251,7 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
                 lon = dep["position"]["longitude"]
                 depth = dep["position"]["depth"]
 
-                loc_name = f"Point lat={lat}, lon={lon}, depth={depth} meters"
+                loc_name = f"Location of {name} at lat={lat}, lon={lon}, depth={depth} meters"
                 loc_description = dep["description"]
                 location = Location(loc_name, loc_description, lat, lon, depth, things=[])
                 location.register(url, update=update, verbose=True)
@@ -258,6 +263,8 @@ def propagate_mongodb_to_sensorthings(mc: MetadataCollector, collections: str, u
         rich.print(f"[green]Creating Datastreams for sensor {sensor['#id']}")
         sensor_name = sensor["#id"]
         sensor_deployments = get_sensor_deployments(mc, sensor["#id"])
+        if len(sensor_deployments) < 1:
+            raise ValueError(f"Sensor {sensor['#id']} does not have a deployment!")
         stations_processed = []
         for station, deployment_time in sensor_deployments:
             if station in stations_processed:
@@ -414,6 +421,11 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
         df = df.drop(dup_idx.index)
         df = df.reset_index()
         df = df.set_index("timestamp")
+
+    # Force qc in upper case -> TEMP_qc -> TEMP_QC
+    for col in df.columns:
+        if col.endswith("_qc"):
+            df = df.rename(columns={col: col.replace("_qc", "_QC")})
 
     db = SensorThingsApiDB(psql_conf["host"], psql_conf["port"], psql_conf["database"], psql_conf["user"],
                                  psql_conf["password"], logging.getLogger(), timescaledb=True)

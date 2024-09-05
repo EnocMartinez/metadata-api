@@ -15,7 +15,8 @@ import jsonschema
 import pandas as pd
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
-from .common import run_subprocess, check_url, detect_common_path, run_over_ssh, LoggerSuperclass
+from .common import run_subprocess, check_url, detect_common_path, run_over_ssh, LoggerSuperclass, assert_types, \
+    assert_type
 from .data_manipulation import open_csv, merge_dataframes_by_columns, merge_dataframes, calculate_time_intervals
 from .metadata_collector import MetadataCollector, init_metadata_collector
 from .fileserver import FileServer
@@ -40,9 +41,10 @@ class DataCollector(LoggerSuperclass):
     """
 
     def __init__(self, secrets: dict, log, mc: MetadataCollector = None, sta: SensorThingsApiDB = None):
+        self.log = log
         LoggerSuperclass.__init__(self, log, "DC")
         if not mc:
-            self.mc = init_metadata_collector(secrets)
+            self.mc = init_metadata_collector(secrets, log=log)
         else:
             self.mc = mc
 
@@ -77,20 +79,49 @@ class DataCollector(LoggerSuperclass):
         filename = dataset_id + "_" + tstart.strftime("%Y%m%d") + "_" + tend.strftime("%Y%m%d") + extensions[fmt]
         return os.path.join(tmp_folder, filename)
 
-    def generate_dataset_tree(self, dataset_id: str, service_name: str, time_start: pd.Timestamp,
-                              time_end: pd.Timestamp,
-                              fmt: str = ""):
-        conf = self.mc.get_document("datasets", dataset_id)
+    def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str,
+                         time_end: pd.Timestamp|str, fmt: str = "") -> list:
+        """
+        Generate a dataset.
+        :return: list of datasets
+        """
+        assert_type(service_name, str)
+        assert_types(dataset, [dict, str])
+        assert_types(time_start, [pd.Timestamp, str])
+        assert_types(time_end, [pd.Timestamp, str])
 
-        if service_name not in conf["export"].keys():
-            raise ValueError(f"Dataset {conf['#id']} doesn't have export configuration for service '{service_name}'")
-
-        service = conf["export"][service_name]
+        if type(dataset) is str:
+            conf = self.mc.get_document("datasets", dataset)
+        else:
+            conf = dataset
 
         if type(time_start) is str:
             time_start = pd.Timestamp(time_start)
         if type(time_end) is str:
             time_end = pd.Timestamp(time_end)
+
+        if time_start > time_end:
+            raise ValueError(f"Time start={time_start} greater than time end={time_end}")
+
+        # Check if we need to create a single file or a tree of smaller files:
+        if conf["export"][service_name]["period"] == "none":
+            d = self.generate_dataset_file(conf, service_name, time_start, time_end, fmt=fmt)
+            return [d]
+        else:
+            return self.generate_dataset_tree(conf, service_name, time_start, time_end, fmt=fmt)
+
+    def generate_dataset_tree(self,  dataset: dict, service_name: str, time_start: pd.Timestamp, time_end: pd.Timestamp,
+                              fmt: str = ""):
+        assert_type(service_name, str)
+        assert_types(dataset, [dict, str])
+        assert_type(time_start, pd.Timestamp)
+        assert_type(time_end, pd.Timestamp)
+        conf = dataset
+
+        if service_name not in conf["export"].keys():
+            raise ValueError(f"Dataset {conf['#id']} doesn't have export configuration for service '{service_name}'")
+
+        service = conf["export"][service_name]
 
         # check the dataset constraints
         if "constraints" in conf.keys() and "timeRange" in conf["constraints"].keys():
@@ -106,20 +137,21 @@ class DataCollector(LoggerSuperclass):
 
         # Get the period
         intervals = calculate_time_intervals(time_start, time_end, service["period"])
+
         datasets = []
         for tstart, tend in intervals:
             try:
-                d = self.generate_dataset(dataset_id, service_name, tstart, tend, fmt=fmt)
+                d = self.generate_dataset_file(conf, service_name, tstart, tend, fmt=fmt)
             except ValueError:
                 # no data found for this period
                 continue
             datasets.append(d)
         return datasets
 
-    def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp, time_end: pd.Timestamp,
-                         fmt: str = "") -> DatasetObject:
+    def generate_dataset_file(self, dataset: dict, service_name: str, time_start: pd.Timestamp,
+                              time_end: pd.Timestamp, fmt: str = "") -> DatasetObject:
         """
-        Generates a dataset based on its configuration stored in MongoDB
+        Generates a dataset based on its configuration stored in Metadata DB
         :param dataset: #id of the dataset
         :param service_name: Name of the service that will be used to export the dataset
         :param time_start: dataset time start
@@ -127,21 +159,16 @@ class DataCollector(LoggerSuperclass):
         :param fmt: overwrite original format (e.g. csv instead of netcdf)
         :return: Dataset file
         """
-        assert type(service_name) is str, f"expected str got {type(service_name)}"
-        assert type(dataset) in [dict, str], f"expected str or dict, got {type(service_name)}"
-        # get the dataset config
-        if type(dataset) is str:
-            conf = self.mc.get_document("datasets", dataset)
-        elif type(dataset) is dict:
-            conf = dataset
+        assert_type(dataset, dict)
+        assert_type(service_name, str)
+        assert_type(time_start, pd.Timestamp)
+        assert_type(time_end, pd.Timestamp)
+        conf = dataset
         # Convert service ID to dict
         if service_name not in conf["export"].keys():
             raise ValueError(f"Dataset {conf['#id']} doesn't have export configuration for service '{service_name}'")
         service = conf["export"][service_name]
-        if type(time_start) is str:
-            time_start = pd.Timestamp(time_start)
-        if type(time_end) is str:
-            time_end = pd.Timestamp(time_end)
+
         # check the dataset constraints
         if "constraints" in conf.keys() and "timeRange" in conf["constraints"].keys():
             ctime_start = pd.Timestamp(conf["constraints"]["timeRange"].split("/")[0])
@@ -166,7 +193,7 @@ class DataCollector(LoggerSuperclass):
             filename = self.zip_from_filesystem(conf, time_start, time_end)
         else:
             raise ValueError(f"Unknown dataSource format '{fmt}'")
-        obj = DatasetObject(conf, filename, service_name, time_start, time_end, fmt)
+        obj = DatasetObject(conf, filename, service_name, time_start, time_end, fmt, self.log)
         return obj
 
     def dataframe_from_sta(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
@@ -389,8 +416,11 @@ class DataCollector(LoggerSuperclass):
             self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skpping")
             raise ValueError("No data")
 
+        self.info("Generating filename...")
         filename = self.dataset_filename(conf, "netcdf", time_start, time_end)
+        self.info("Calling NetCDF wrapper...")
         filename = self.call_dataset_generator(dataframes, metadata, output=filename)
+        self.info(f"Dataset {filename} generated!")
         return filename
 
     def csv_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp):
@@ -421,6 +451,7 @@ class DataCollector(LoggerSuperclass):
 
         # Create the dataset in /var/tmp
         remote_filename = self.dataset_filename(conf, "zip", time_start, time_end, tmp_folder="/var/tmp")
+        self.info(f"Creating ZIP dataset, ID: {conf['#id']}, from {time_start} to {time_end}")
 
         # First step, get all files indexed in the SensorThings database
         datastream_ids = []
@@ -448,17 +479,18 @@ class DataCollector(LoggerSuperclass):
         ''', debug=False)
 
         files = list(df["files"].values)  # List of all files to be compressed
-
         if len(files) < 1:
-            rich.print(f"[red]No files to be zipped!")
-            return ""
+            raise ValueError(f"No files to be zipped!")
+        elif len(files) == 1:
+            rich.print(f"[yellow]Just one file!")
+            raise ValueError(f"Just one file to be zipped?")
 
         # Now convert the file URLs to filesystem paths
         files = [self.fileserver.url2path(f) for f in files]
 
         # Try to remove path until the sensor name
         basepath = detect_common_path(files)
-        rich.print(f"Base path for all files is {basepath}")
+        self.debug(f"Base path for all files is {basepath}")
         # If common prefix goes beyond the sensor name, shorten it, we want to keep the sensor name
         if sensor.lower() not in basepath.lower():
             idx = basepath.lower().find(sensor.lower())
@@ -514,10 +546,10 @@ class DataCollector(LoggerSuperclass):
                                  default_data_mode="real-time", os_data_type="OceanSITES time-series data",
                                  tstart: str = "", tend: str = "") -> dict:
         """
-        This method returns the configuration required by the Metadata Harmonizer tool from the MongoDB
-        :param dataset: sensor dict from MongoDB database
-        :param sensor: sensor dict from MongoDB database
-        :param station: station dict from MongoDB database
+        This method returns the configuration required by the Metadata Harmonizer tool from the Metadata DB
+        :param dataset: sensor dict from Metadata DB database
+        :param sensor: sensor dict from Metadata DB database
+        :param station: station dict from Metadata DB database
         :param variable_ids: list of variables to be included in the dataset
         :param default_data_mode: Default data mode
         :param os_data_type: OceanSITES data type, probably by default time-series data
