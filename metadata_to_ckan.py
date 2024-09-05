@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-This script updates data from MongoDB and registers it to CKAN
+This script updates data from metadata database and registers it to CKAN
 
 author: Enoc Martínez
 institution: Universitat Politècnica de Catalunya (UPC)
@@ -9,7 +9,7 @@ license: MIT
 created: 21/09/2023
 """
 from argparse import ArgumentParser
-from mmm import CkanClient, propagate_mongodb_to_ckan
+from mmm import CkanClient, propagate_metadata_to_ckan
 import yaml
 from mmm.metadata_collector import init_metadata_collector
 
@@ -34,4 +34,4 @@ if __name__ == "__main__":
     org = secrets["ckan"]["organization_logos"]
 
     ckan = CkanClient(mc, secrets["ckan"]["url"], secrets["ckan"]["api_key"])
-    propagate_mongodb_to_ckan(mc, ckan, collections)
+    propagate_metadata_to_ckan(mc, ckan, collections)

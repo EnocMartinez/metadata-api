@@ -144,11 +144,15 @@ class LoggerSuperclass:
         mystr = YEL + "[%s] " % self.__logger_name + str(*args) + RST
         self.__logger.warning(mystr)
 
-    def error(self, *args, exception=False):
+    def error(self, *args, exception: any = False):
         mystr = "[%s] " % self.__logger_name + str(*args)
         self.__logger.error(RED + mystr + RST)
         if exception:
-            raise ValueError(mystr)
+            if isinstance(exception(), Exception):
+                raise exception(mystr)
+            else:
+                raise ValueError(mystr)
+
 
     def debug(self, *args):
         mystr = self.__log_colour + "[%s] " % self.__logger_name + str(*args) + RST
@@ -266,7 +270,7 @@ def __get_field(doc: dict, key: str):
 
 def load_fields_from_dict(doc: dict, fields: list, rename: dict = {}) -> dict:
     """
-    Takes a document from MongoDB and returns all fields in list. If a field in the list is not there, ignore it:
+    Takes a document from metadata database and returns all fields in list. If a field in the list is not there, ignore it:
 
         doc = {"a": 1, "b": 1  "c": 1} and fields = ["a", "b", "d"]
             return {"a": 1, "b": 1 }
@@ -310,7 +314,7 @@ def detect_common_path(paths):
     """
     Returns the common prefix in a list of strings
     """
-
+    rich.print(paths)
     path_splits = [p.split("/") for p in paths]  # list of lists of paths
     i = -1
     loop = True
@@ -402,22 +406,6 @@ def assert_dict(conf: dict, required_keys: dict, verbose=False):
             raise AssertionError(msg)
 
 
-def environment_from_file(filename):
-    with open(filename) as f:
-        lines = f.readlines()
-
-    lines = [line.strip() for line in lines]
-    environ = os.environ
-    for line in lines:
-        # remove comment
-        line = line.split("#")[0]
-        if "=" in line:
-            key, value = line.split("=")
-            value = value.replace("\'", "").replace("\"", "")
-            environ[key] = value
-    return environ
-
-
 def validate_schema(doc: dict, schema: dict, errors: list, verbose=False) -> list:
     if "$id" not in schema.keys():
         raise ValueError("Schema not valid!! missing $id field")
@@ -465,4 +453,23 @@ def retrieve_url(url, output="", attempts=3, timeout=5):
         raise exc
 
 
+def assert_type(obj, valid_type):
+    """
+    Asserts that obj is of type <valid_type>
+    :param obj:  any object
+    :param valid_type:  any type
+    """
 
+    assert isinstance(obj, valid_type), f"Expected {valid_type}, but got {type(obj)} instead"
+
+
+def assert_types(obj, valid_types):
+    """
+    Asserts that obj is of type <valid_type>
+    :param obj:  any object
+    :param valid_types:  list of types
+    """
+    assert isinstance(valid_types, list), "valid_types should be a list of types!"
+    valid_string = ", ".join([str(t) for t in valid_types])
+    valid_string = valid_string.replace("<class ", "").replace(">", "")
+    assert type(obj) in valid_types, f"Expected on of {valid_string}, but got {type(obj)} instead"

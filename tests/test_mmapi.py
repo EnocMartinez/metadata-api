@@ -24,7 +24,7 @@ import json
 from PIL import Image, ImageDraw
 
 try:
-    from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data, propagate_mongodb_to_ckan, \
+    from mmm import init_metadata_collector, setup_log, init_data_collector, bulk_load_data, propagate_metadata_to_ckan, \
         CkanClient, get_station_deployments
 except ModuleNotFoundError:
     # Get the directory of the current script
@@ -35,8 +35,8 @@ except ModuleNotFoundError:
     # Add the parent directory to the sys.path
     sys.path.insert(0, parent_dir)
 
-    from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_mongodb_to_sensorthings,
-                     bulk_load_data, propagate_mongodb_to_ckan, CkanClient, get_station_deployments)
+    from mmm import (init_metadata_collector, setup_log, init_data_collector, propagate_metadata_to_sensorthings,
+                     bulk_load_data, propagate_metadata_to_ckan, CkanClient, get_station_deployments)
     from mmm.common import GRN, RST, LoggerSuperclass, run_subprocess, file_list, dir_list, check_url, retrieve_url
     from mmapi import run_metadata_api
     from sta_timeseries import run_sta_timeseries_api
@@ -57,6 +57,13 @@ def post_json(url, data):
         raise ConnectionError(f"HTTP error='{r.status_code}' at url={url}")
 
 
+def patch_json(url, data):
+    headers = {"Content-Type": "application/json"}
+    r = requests.patch(url, headers=headers, data=json.dumps(data))
+    if r.status_code > 299:
+        raise ConnectionError(f"HTTP error='{r.status_code}' at url={url}")
+
+
 class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     @classmethod
     def setUpClass(cls):
@@ -72,7 +79,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         with open(cls.secrets) as f:
             cls.conf = yaml.safe_load(f)["secrets"]
 
-        cls.mmapi_url = cls.conf["mmapi"]["root_url"] + "/v1.0"
+        cls.mmapi_url = cls.conf["mmapi"]["root_url"] + "/mmapi/v1.0"
         cls.sta_url = cls.conf["sensorthings"]["url"]
 
         with open("sta-timeseries.env") as f:
@@ -82,6 +89,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     cls.sta_ts_url = line.split("=")[1].replace("\"", "")
                     break
 
+        os.makedirs("erddapData", mode=0o777, exist_ok=True)
         # Create volumes for all docker services
         with open("docker-compose.yaml") as f:
             docker_config = yaml.safe_load(f)
@@ -109,13 +117,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         run_subprocess("docker compose up -d --build", fail_exit=True)
 
         log.info("Setup Metadata Collector...")
-        cls.mc = init_metadata_collector(conf)
+        cls.mc = init_metadata_collector(conf, log=log)
         cls.log = log
         log.info("Setup Data Collector...")
         cls.dc = init_data_collector(conf, log, mc=cls.mc)
         cls.stadb = cls.dc.sta
 
-        log.info("Clearing MongoDB database...")
+        log.info("Clearing Metadata DB database...")
         cls.mc.drop_all()
         cls.dc.sta.drop_all()
 
@@ -161,7 +169,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         """Run all tests for MMAPI in a sequential manner"""
         self.log.info("Launching Metadata API in a dedicate thread...")
         #     run_flask_app(secrets, args.environment, log, mc, thread=True)
-        mapi = Thread(target=run_metadata_api, args=(self.secrets, None, self.log, self.mc), daemon=True)
+        mapi = Thread(target=run_metadata_api, args=(self.secrets, self.log, self.mc), daemon=True)
         mapi.start()
         time.sleep(0.5)
         d = get_json(self.mmapi_url)
@@ -172,7 +180,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.log.info("Inserting several 'units' via API")
         data = {
             "#id": "degrees_celsius",
-            "name": "degrees Celsius",
+            "name": "degrees Celsius2",
             "symbol": "degC",
             "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UPAA/",
             "type": "linear"
@@ -189,8 +197,40 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         units = get_json(url)
         self.assertEqual(data["symbol"], units["symbol"])
 
+        # Make sure that update works
+
     def test_03_add_via_api(self):
         """adding units and variables via API"""
+        d = {
+            "#id": "siemens_per_metre",
+            "name": "siemens per metre1",
+            "symbol": "S/m",
+            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UECA/",
+            "type": "linear"
+        }
+        post_json(self.mmapi_url + "/units", d)
+
+        # Ensure history
+        d = {
+            "#id": "siemens_per_metre",
+            "name": "siemens per metre2",
+            "symbol": "S/m",
+            "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UECA/",
+            "type": "linear"
+        }
+        self.mc.replace_document("units", d["#id"], d)
+
+        d1 = get_json(self.mmapi_url + "/units/siemens_per_metre/history/1")
+        d2 = get_json(self.mmapi_url + "/units/siemens_per_metre/history/2")
+
+        self.assertEqual(d1["name"], "siemens per metre1")
+        self.assertEqual(d2["name"], "siemens per metre2")
+
+        # Now delete siemens_per_metre from current database, but not from history
+        self.mc.delete_document("units", "siemens_per_metre")
+
+        # Now insert it again, we should keep version history!
+
         d = {
             "#id": "siemens_per_metre",
             "name": "siemens per metre",
@@ -198,7 +238,13 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "definition": "https://vocab.nerc.ac.uk/collection/P06/current/UECA/",
             "type": "linear"
         }
-        post_json(self.mmapi_url + "/units", d)
+        resp = post_json(self.mmapi_url + "/units", d)
+        rich.print(resp)
+
+
+        # Make sure that we can access the v3 from the history endpoint
+        d3 = get_json(self.mmapi_url + "/units/siemens_per_metre/history/3")
+        self.assertEqual(d3["name"], "siemens per metre")
 
         d = {
             "#id": "TEMP",
@@ -296,6 +342,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_04_assert_schema(self):
         """trying to insert a non-compliant document to catch the exception"""
+        self.info("Inserting an erroneous unit")
         d = {
             "#id": "CNDC2",
             "standard_nam2e": "sea_water_electrical_conductivity",
@@ -305,7 +352,18 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "type": "environmental"
         }
         with self.assertRaises(ValueError) as cm:
-            self.mc.insert_document("units", d)
+            self.mc.insert_document("variables", d)
+
+        d = {
+            "#id": "CNDC",
+            "standard_name": "sea_water_electrical_conductivity",
+            "description": "sea water electrical conductivity UPDATED",
+            "definition": "https://vocab.nerc.ac.uk/collection/P01/current/CNDCST01/",
+            "cf_compliant": True,
+            "type": "environmental"
+        }
+        self.info("Updating a document")
+        self.mc.insert_document("variables", d, update=True)
 
     def test_05_add_process(self):
         """Adding average process"""
@@ -957,14 +1015,14 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "erddap": {
                     "host": "localhost",
                     "fileTreeLevel": "monthly",
-                    "path": "./datasets/obsea_ctd_full",
+                    "path": "./datasets",
                     "period": "daily",
                     "format": "netcdf"
                 },
                 "fileserver": {
                     "host": "localhost",
                     "fileTreeLevel": "none",
-                    "path": "/var/tmp/mmapi/volumes/files/datasets/obsea_ctd_full",
+                    "path": "/var/tmp/mmapi/volumes/files/datasets",
                     "period": "yearly",
                     "format": "netcdf"
                 }
@@ -1009,7 +1067,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "export": {
                 "erddap": {
                     "host": "localhost",
-                    "path": "./datasets/obsea_ctd_full",
+                    "path": "./datasets",
                     "period": "daily",
                     "format": "netcdf"
                 },
@@ -1088,15 +1146,15 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         self.mc.insert_document("datasets", d)
 
     def test_20_propagate_to_sensorthings(self):
-        """Propagate metadata from MongoDB to SensorThingsAPI"""
-        propagate_mongodb_to_sensorthings(self.mc, [], self.conf["sensorthings"]["url"], update=True)
+        """Propagate metadata from Metadata DB to SensorThingsAPI"""
+        propagate_metadata_to_sensorthings(self.mc, [], self.conf["sensorthings"]["url"], update=True)
 
         # Make sure that we have defaultFeatureOfInterest
         self.dc.sta.get_datastream_id("AWAC", "OBSEA", "CDIR", "profiles", "30min")
 
     def test_21_launch_sta_timeseries(self):
         """launching sensorthings timeseries API"""
-        mapi = Thread(target=run_sta_timeseries_api, args=["sta-timeseries.env", self.log], daemon=True)
+        mapi = Thread(target=run_sta_timeseries_api, args=["sta-timeseries.env", self.log, 8081], daemon=True)
         mapi.start()
         time.sleep(0.5)
         d = get_json(self.sta_ts_url)
@@ -1180,7 +1238,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         """Ingesting average timeseries data using the API"""
         # Generate sine wave values
         frequency = 1
-        dates = pd.date_range(start='2023-01-01', end="2023-01-31", freq='100s')
+        dates = pd.date_range(start='2023-01-01', end="2023-03-31", freq='100s')
         tvector = np.arange(0, len(dates)) / 1000
         # Create a pandas DataFrame
         df = pd.DataFrame({
@@ -1682,100 +1740,105 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_70_propagate_to_ckan(self):
         rich.print("==== setup CKAN ====")
-        propagate_mongodb_to_ckan(self.mc, self.ckan, collections=[])
+        propagate_metadata_to_ckan(self.mc, self.ckan, collections=[])
 
     def test_71_generate_fileserver_datasets(self):
         """Creating a dataset"""
         os.makedirs("datasets", exist_ok=True)
         # Export CSV
         dataset_id = "obsea_ctd_full"
-        csv_dataset = self.dc.generate_dataset(dataset_id, "fileserver", "2020-01-01", "2021-01-01", fmt="csv")
-        csv_dataset.deliver(fileserver=self.dc.fileserver)
-        print(csv_dataset)
+        csv_datasets = self.dc.generate_dataset(dataset_id, "fileserver", "2020-01-01", "2021-01-01", fmt="csv")
+        for csv_dataset in csv_datasets:
+            csv_dataset.deliver(fileserver=self.dc.fileserver)
+            print(csv_dataset)
         self.assertTrue(check_url(csv_dataset.url))
 
         self.dc.upload_datafile_to_ckan(self.ckan, csv_dataset)
 
         # Export NetCDF
-        nc_dataset = self.dc.generate_dataset("obsea_ctd_full", "fileserver", "2020-01-01", "2030-01-01")
-        nc_dataset.deliver(fileserver=self.dc.fileserver)
-        self.assertTrue(check_url(nc_dataset.url))
-        self.dc.upload_datafile_to_ckan(self.ckan, nc_dataset)
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "fileserver", "2020-01-01", "2020-02-01")
+        for nc_dataset in nc_datasets:
+            nc_dataset.deliver(fileserver=self.dc.fileserver)
+            self.assertTrue(check_url(nc_dataset.url))
+            self.dc.upload_datafile_to_ckan(self.ckan, nc_dataset)
 
         # Force error in format
         # Export NetCDF
         with self.assertRaises(AssertionError):
             self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-01-01", fmt="potato")
 
-        zip_dataset = self.dc.generate_dataset("IPC608_pics", "fileserver", "2020-01-01", "2030-01-01")
-        zip_dataset.deliver(self.dc.fileserver)
-
-        self.assertTrue(check_url(zip_dataset.url))
-        self.dc.upload_datafile_to_ckan(self.ckan, zip_dataset)
+        zip_datasets = self.dc.generate_dataset("IPC608_pics", "fileserver", "2020-01-01", "2020-02-01")
+        for zip_dataset in zip_datasets:
+            zip_dataset.deliver(self.dc.fileserver)
+            self.assertTrue(check_url(zip_dataset.url))
+            self.dc.upload_datafile_to_ckan(self.ckan, zip_dataset)
 
     def test_80_config_erddap(self):
         """creates a dataset and upload it to ERDDAP"""
-        nc_dataset = self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2030-01-01")
-        nc_dataset.deliver()
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_full", "erddap", "2020-01-01", "2020-02-01")
+        for nc_dataset in nc_datasets:
+            nc_dataset.deliver()
 
-        # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
-        data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
-        nc_dataset.configure_erddap("conf/datasets.xml", data_path)
-        nc_dataset.reload_erddap_dataset("erddapData")
-        self.info("Wait 5 seconds for ERDDAP to reload...")
-        time.sleep(5)
-        # Now get ERDDAP data!
-        erddap_dataset = "mydataset.csv"
-        dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
-        self.info(f"Downloading dataset from erddap: {dataset_url}")
-        df = pd.read_csv(erddap_dataset)
+            # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
+            data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
+            nc_dataset.configure_erddap("conf/datasets.xml", data_path)
+            nc_dataset.reload_erddap_dataset("erddapData")
+            self.info("Wait 5 seconds for ERDDAP to reload...")
+            time.sleep(5)
+            # Now get ERDDAP data!
+            erddap_dataset = "mydataset.csv"
+            dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
+            self.info(f"Downloading dataset from erddap: {dataset_url}")
+            df = pd.read_csv(erddap_dataset)
 
     def test_80_config_erddap_with_daily_data(self):
         """creates a dataset with daily files and upload it to ERDDAP"""
-        nc_dataset = self.dc.generate_dataset("obsea_ctd_30min", "erddap", "2020-01-01", "2030-01-01")
-        nc_dataset.deliver()
+        nc_datasets = self.dc.generate_dataset("obsea_ctd_30min", "erddap", "2022-01-01", "2022-02-01")
+        for nc_dataset in nc_datasets:
+            nc_dataset.deliver()
 
-        # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
+            # Convert from host path to erddap container path, otherwise ERDDAP will not see the files
         data_path = nc_dataset.exporter.path.replace("./datasets", "/datasets")
         nc_dataset.configure_erddap("conf/datasets.xml", data_path)
         nc_dataset.reload_erddap_dataset("erddapData")
 
-        # Now get ERDDAP data!
+            # Now get ERDDAP data!
         erddap_dataset = "mydataset.csv"
         dataset_url = "http://localhost:8090/erddap/tabledap/" + nc_dataset.erddap_dataset_id + ".csv"
         self.info(f"Downloading dataset from erddap: {dataset_url}")
         retrieve_url(dataset_url, output=erddap_dataset)
-        pd.read_csv(erddap_dataset)
+        df = pd.read_csv(erddap_dataset)
 
-        datasets = self.dc.generate_dataset_tree("obsea_ctd_30min", "erddap", "2022-01-01", "2022-01-01")
+
+        datasets = self.dc.generate_dataset("obsea_ctd_30min", "erddap", "2022-01-01", "2022-01-01")
         for dataset in datasets:
             dataset.deliver()
 
 
     @classmethod
     def tearDownClass(cls):
-        cls.log.info("stopping containers")
-
-        run_subprocess("docker compose down")
-        rich.print("Deleting temporal docker volumes...")
-        for volume in cls.docker_volumes:
-            if os.path.isfile(volume):
-                continue  # ignore volume files
-
-            for f in file_list(volume):
-                os.remove(f)
-
-            # now remove any subdirs
-            subdir_list = dir_list(volume)
-            subdir_list = list(reversed(sorted(subdir_list)))
-            for subdir in subdir_list:
-                if os.path.isfile(subdir):
-                    raise ValueError("This should not happen!")
-                os.rmdir(subdir)
-
-        for volume in cls.docker_volumes:
-            if os.path.isdir(volume):
-                os.rmdir(volume)
+        pass
+        # cls.log.info("stopping containers")
+        # run_subprocess("docker compose down")
+        # rich.print("Deleting temporal docker volumes...")
+        # for volume in cls.docker_volumes:
+        #     if os.path.isfile(volume):
+        #         continue  # ignore volume files
+        #
+        #     for f in file_list(volume):
+        #         os.remove(f)
+        #
+        #     # now remove any subdirs
+        #     subdir_list = dir_list(volume)
+        #     subdir_list = list(reversed(sorted(subdir_list)))
+        #     for subdir in subdir_list:
+        #         if os.path.isfile(subdir):
+        #             raise ValueError("This should not happen!")
+        #         os.rmdir(subdir)
+        #
+        # for volume in cls.docker_volumes:
+        #     if os.path.isdir(volume):
+        #         os.rmdir(volume)
 
 
 if __name__ == "__main__":

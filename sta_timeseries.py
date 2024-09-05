@@ -28,19 +28,49 @@ import yaml
 from flask import Flask, request, Response
 from flask_basicauth import BasicAuth
 from flask_cors import CORS
-from mmm.common import setup_log, assert_dict, GRN, BLU, MAG, CYN, WHT, YEL, RED, NRM, RST, environment_from_file, \
-    LoggerSuperclass
+from mmm.common import setup_log, assert_dict, GRN, BLU, MAG, CYN, WHT, YEL, RED, NRM, RST, LoggerSuperclass
 import time
 import os
 import rich
 from mmm import SensorThingsApiDB, init_metadata_collector_env
 import datetime
 import psycopg2
+from functools import wraps  # Import wraps here
+import dotenv
 
 app = Flask("SensorThings TimeSeries")
 CORS(app)
 
 basic_auth = BasicAuth(app)
+
+service_root = "/sta-timeseries/v1.1"
+
+
+def determine_auth_requirement():
+    """
+    :return: True/False
+    """
+    if app.sta_auth:
+        return True
+    return False
+
+
+def conditional_basicauth():
+    """
+    Defines a conditional way to dynamically request BasicAuth
+    :return:
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            # Assume there's a function that determines if auth should be enabled
+            enable_auth = determine_auth_requirement()
+            if enable_auth:
+                return basic_auth.required(f)(*args, **kwargs)
+            else:
+                return f(*args, **kwargs)
+        return decorated_function
+    return decorator
 
 
 def get_datastream_id(datastream: dict):
@@ -50,7 +80,7 @@ def get_datastream_id(datastream: dict):
     if "@iot.id" in datastream.keys():
         return datastream["@iot.id"]
     elif "name" in datastream.keys():
-        return  app.db.datastreams_ids[datastream["name"]]
+        return app.db.datastreams_ids[datastream["name"]]
     else:
         raise ValueError("Can't get DatastreamID for this query, no iot.id nor name!")
 
@@ -153,9 +183,8 @@ def expand_element(resp, parent_element, expanding_key, opts):
 
         observation_list = format_observation_list(list_data, foi_id, datastream_id, opts)
         datastream["Observations@iot.nextLink"] = generate_next_link(len(list_data), opts, datastream_id)
-        datastream["Observations@iot.navigatioinLink"] = sta_base_url + f"/Datastreams({datastream_id})/Observations"
+        datastream["Observations@iot.navigatioinLink"] = app.sta_base_url + f"/Datastreams({datastream_id})/Observations"
         datastream["Observations"] = observation_list
-
     return resp
 
 
@@ -223,10 +252,10 @@ def decode_expand_options(expand_string: str):
 
 
 def get_sta_request(request):
-    sta_url = f"{app.sta_base_url}{request.full_path}"
+    # https://my.dns.com/sta-timeseries/v1.1/something/else
+    sta_url = app.sta_get_url + request.full_path.replace(service_root, "")
     app.log.debug(f"Generic query, fetching {sta_url}")
-    resp = requests.get(sta_url)
-    rich.print(f"[yellow]Getting STA: {sta_url}")
+    resp = requests.get(sta_url, auth=app.sta_auth)
     code = resp.status_code
     text = resp.text.replace(app.sta_base_url, app.service_url)  # hide original URL
     return text, code
@@ -235,7 +264,7 @@ def get_sta_request(request):
 def post_sta_request(request):
     sta_url = f"{app.sta_base_url}{request.full_path}"
     app.log.debug(f"[cyan]Generic query, fetching {sta_url}")
-    resp = requests.post(sta_url, request.data, headers=request.headers)
+    resp = requests.post(sta_url, request.data, headers=request.headers, auth=app.sta_auth)
     code = resp.status_code
     text = resp.text.replace(app.sta_base_url, app.service_url)  # hide original URL
     return text, code
@@ -453,6 +482,8 @@ def generate_response(text, status=200, mimetype="application/json", headers={})
     """
     Finals touch before sending the result, mainly replacing FROST url with our url
     """
+    if isinstance(text, dict):
+        text = json.dumps(text)
     text = text.replace(app.sta_base_url, app.service_url)
     response = Response(text, status, mimetype=mimetype)
     for key, value in headers.items():
@@ -460,22 +491,46 @@ def generate_response(text, status=200, mimetype="application/json", headers={})
     return response
 
 
-@app.route('/<path:path>', methods=['GET'])
+@app.route(f'{service_root}/<path:path>', methods=['GET'])
+@conditional_basicauth()
 def generic_query(path):
     text, code = get_sta_request(request)
-    resp = json.loads(text)
-    return process_sensorthings_response(request, resp)
+    if code > 300:
+        if "favicon.ico" not in request.full_path:  # ignore favicon errors
+            app.log.error(f"ERROR! in request '{request}' HTTP code '{code}' response '{text}'")
+        return Response(text, code)
+    else:
+        resp = json.loads(text)
+        return process_sensorthings_response(request, resp)
 
 
-@app.route('/', methods=['GET'])
+@app.route(f'{service_root}/', methods=['GET'])
+@app.route(f'{service_root}', methods=['GET'])
+@conditional_basicauth()
 def generic():
     rich.print("[purple]Regular query, forward to SensorThings API")
     text, code = get_sta_request(request)
     opts = process_sensorthings_options(request.args.to_dict())
-    return process_sensorthings_response(request, json.loads(text))
+    try:
+        json_response = json.loads(text)
+    except json.decoder.JSONDecodeError:
+        return Response(text, code)
+
+    return process_sensorthings_response(request, json_response)
 
 
-@app.route('/Observations(<int:observation_id>)', methods=['GET'])
+@app.route(f'/{service_root.split("/")[1]}', methods=['GET'])
+@app.route(f'/{service_root.split("/")[1]}/', methods=['GET'])
+@conditional_basicauth()
+def no_version():
+    d = {
+        "success": False,
+        "message": f"No API version found, try {request.url}/v1.1"
+    }
+    return generate_response(d)
+
+@app.route(f'{service_root}/Observations(<int:observation_id>)', methods=['GET'])
+@conditional_basicauth()
 def get_observation(observation_id):
     """
     Observations
@@ -504,7 +559,8 @@ def get_observation(observation_id):
         return generate_response(json.dumps(error_message), 400, mimetype='application/json')
 
 
-@app.route('/Observations', methods=['GET'])
+@app.route(f'{service_root}/Observations', methods=['GET'])
+@conditional_basicauth()
 def get_observations():
     """
     Get generic Observations. Probably filtered by datastream, so we need to check the filter
@@ -543,12 +599,14 @@ def get_observations():
         return generate_response(json.dumps(error_message), 400, mimetype='application/json')
 
 
-@app.route('/Sensors(<int:sensor_id>)/Datastreams(<int:datastream_id>)/Observations', methods=['GET'])
+@app.route(f'{service_root}/Sensors(<int:sensor_id>)/Datastreams(<int:datastream_id>)/Observations', methods=['GET'])
+@conditional_basicauth()
 def sensors_datastreams_observations(sensor_id, datastream_id):
     return datastreams_observations_get(datastream_id)
 
 
-@app.route('/Datastreams(<int:datastream_id>)', methods=['GET'])
+@app.route(f'{service_root}/Datastreams(<int:datastream_id>)', methods=['GET'])
+@conditional_basicauth()
 def just_datastreams(datastream_id):
     rich.print(f"[green]Got a datastream request: {request.path}")
     text, code = get_sta_request(request)
@@ -556,7 +614,8 @@ def just_datastreams(datastream_id):
     return process_sensorthings_response(request, resp)
 
 
-@app.route('/Datastreams(<int:datastream_id>)/Observations', methods=['GET'])
+@app.route(f'{service_root}/Datastreams(<int:datastream_id>)/Observations', methods=['GET'])
+@conditional_basicauth()
 def datastreams_observations_get(datastream_id, opts=None):
     try:
         if not opts:
@@ -617,13 +676,13 @@ def datastreams_observations_get(datastream_id, opts=None):
         return generate_response(json.dumps(error_message), 500, mimetype='application/json')
 
 
-@app.route('/Datastreams(<int:datastream_id>)/Observations', methods=['POST'])
+@app.route(f'{service_root}/Datastreams(<int:datastream_id>)/Observations', methods=['POST'])
 @basic_auth.required
 def datastreams_observations_post(datastream_id):
     data = json.loads(request.data.decode())
     return observation_post_handler(data, datastream_id)
 
-@app.route('/Observations', methods=['POST'])
+@app.route(f'{service_root}/Observations', methods=['POST'])
 @basic_auth.required
 def observations_post():
     data = json.loads(request.data.decode())
@@ -777,23 +836,29 @@ def add_cors_headers(response):
     return response
 
 
-def run_sta_timeseries_api(env_file="", log=None):
+def run_sta_timeseries_api(env_file="", log=None, port=5000):
     if not log:
         log = setup_log("STA-TS")
-
+    log.setLevel(logging.DEBUG)
     app.log = LoggerSuperclass(log, "STA-TS", colour=CYN)
 
     if env_file:
         # override os.environ with file enironment vars
-        environ = environment_from_file(env_file)
+        rich.print(f"[purple]loading {env_file}")
+        environ = dotenv.dotenv_values(env_file)
     else:
         environ = os.environ
 
-    required_env_variables = ["STA_DB_HOST", "STA_DB_USER", "STA_DB_PORT", "STA_DB_PASSWORD", "STA_DB_NAME", "STA_URL",
-                              "STA_TS_ROOT_URL", "STA_TS_USER", "STA_TS_PASSWORD"]
+    required_env_variables = ["STA_DB_HOST", "STA_DB_USER", "STA_DB_PORT", "STA_DB_PASSWORD", "STA_DB_NAME",
+                              "STA_BASE_URL", "STA_URL_GET", "STA_TS_ROOT_URL", "STA_DB_BASICAUTH"]
+
+    # If basicauth is active, user and password are also required!
+    if "STA_DB_BASICAUTH" in environ.keys() and environ["STA_DB_BASICAUTH"].lower() == "true":
+        app.log.info("BasicAuth is activated")
+        required_env_variables += ["STA_TS_USER", "STA_TS_PASSWORD"]
 
     for key in required_env_variables:
-        if key not in os.environ.keys():
+        if key not in environ.keys():
             raise EnvironmentError(f"Environment variable '{key}' not set!")
 
     db_name = environ["STA_DB_NAME"]
@@ -802,27 +867,42 @@ def run_sta_timeseries_api(env_file="", log=None):
     db_password = environ["STA_DB_PASSWORD"]
     db_host = environ["STA_DB_HOST"]
     app.service_url = environ["STA_TS_ROOT_URL"]
-    app.sta_base_url = environ["STA_URL"]
 
-    # Get the port from the URL
-    try:
-        port = int(app.service_url.split(":")[2].split("/")[0])
-    except IndexError:
-        port = 80
+    print(f"--> db_user: {db_user}")
+    print(f"--> db_password: {db_password}")
+    print(f"--> db_host: {db_host}")
 
-    app.config['BASIC_AUTH_USERNAME'] = os.environ["STA_TS_USER"]
-    app.config['BASIC_AUTH_PASSWORD'] = os.environ["STA_TS_PASSWORD"]
 
-    if "STA_TS_DEBUG" in os.environ.keys():
+    app.sta_base_url = environ["STA_BASE_URL"]  # URL to get SensorThings Data
+    app.sta_get_url = environ["STA_URL_GET"]
+    app.log.info(f"SensorThings Base URL: {app.sta_base_url}")
+    app.log.info(f"SensorThings Get URL: {app.sta_get_url}")
+
+    if environ["STA_DB_BASICAUTH"].lower() == "true":
+        app.sta_auth = (environ["STA_TS_USER"], environ["STA_TS_PASSWORD"])
+        app.config['BASIC_AUTH_USERNAME'] = environ["STA_TS_USER"]
+        app.config['BASIC_AUTH_PASSWORD'] = environ["STA_TS_PASSWORD"]
+
+        print_pwd = "*" * len(app.config['BASIC_AUTH_PASSWORD'][:-4])
+        print_pwd += app.config['BASIC_AUTH_PASSWORD'][-4:]
+        app.log.info(f"STA User: '{app.config['BASIC_AUTH_USERNAME']}'")
+        app.log.info(f"STA password: '{print_pwd}'")
+
+    elif environ["STA_DB_BASICAUTH"].lower() == "false":
+        app.sta_auth = ()
+    else:
+        raise ValueError(f"Expected true or false, got {environ['STA_DB_BASICAUTH']}")
+
+    if "STA_TS_DEBUG" in environ.keys():
         app.log.setLevel(logging.DEBUG)
         app.log.debug("Setting log to DEBUG level")
 
-    app.log.info(f"Service URL: {app.service_url}")
-    app.log.info(f"SensorThings URL: {app.sta_base_url}")
-
-    app.log.info("Setting up db connector")
+    app.log.info(f"Service sta_ts_url: {app.service_url}")
+    app.log.info(f"SensorThings sta_base_url: {app.sta_base_url}")
+    app.log.info("Setting up DB connector")
     app.db = SensorThingsApiDB(db_host, db_port, db_name, db_user, db_password, app.log, timescaledb=True)
     app.log.info("Getting sensor list...")
+    app.log.info(f"service root is {service_root}")
     app.run(host="0.0.0.0", debug=False, port=port)
 
 

@@ -26,7 +26,7 @@ def merge_csv(input_files, output):
     """
     rich.print("Merging files:", input_files)
     rich.print(f"Into {output}")
-
+    input_files = sorted(input_files)
     # Make sure all headers are equal
     with open(input_files[0]) as f:
         header = f.readline()
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     try:
         merge_csv(files, args.output)
     except ValueError:
-        rich.print("could do quick merge, loading them into dataframes...")
+        rich.print("couldn't do quick merge, loading them into dataframes...")
 
         dataframes = [open_csv(file, time_format="%Y-%m-%dT%H:%M:%Sz") for file in files]
         df = merge_dataframes(dataframes, sort=True)
