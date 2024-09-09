@@ -12,7 +12,6 @@ created: 23/3/21
 from argparse import ArgumentParser
 import rich
 from shutil import copy2
-
 from mmm.common import file_list
 from mmm.data_manipulation import open_csv, merge_dataframes
 
@@ -44,13 +43,13 @@ def merge_csv(input_files, output):
             with open(file) as fin:
                 lines = fin.readlines()[1:]
             fout.writelines(lines)
-    rich.print("[green]Done!")
 
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
     argparser.add_argument("input", help="Folder containing of files to be merged")
     argparser.add_argument("output", help="Output file", type=str)
+    argparser.add_argument("--ignore-columns", help="Ignore columns (use a comma-separated list)", type=str)
     args = argparser.parse_args()
     files = file_list(args.input)
     files = sorted(files)
@@ -58,18 +57,20 @@ if __name__ == "__main__":
         merge_csv(files, args.output)
     except ValueError:
         rich.print("couldn't do quick merge, loading them into dataframes...")
-
         dataframes = [open_csv(file, time_format="%Y-%m-%dT%H:%M:%Sz") for file in files]
+
+        columns = args.ignore_columns.split(",")
+
+        for c in columns:
+            for i in range(len(dataframes)):
+                df = dataframes[i]
+                if c in df.columns:
+                    del df[c]
+
         df = merge_dataframes(dataframes, sort=True)
-        df = df.sort_index()
-        rich.print(df)
         df.to_csv(args.output)
 
-
-
-
-
-
-
-
-
+    rich.print("Sort dataframe by time...", end="")
+    df = open_csv(args.output, format=True)
+    df.to_csv(args.output)
+    rich.print("[green]Done!")

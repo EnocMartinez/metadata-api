@@ -11,9 +11,11 @@ created: 21/9/23
 import os
 import logging
 import urllib
+from datetime import datetime
 from logging.handlers import TimedRotatingFileHandler
 
 import jsonschema
+import pandas as pd
 import rich
 import requests
 import subprocess
@@ -127,6 +129,28 @@ def dir_list(dir_name) -> list:
             all_files = all_files + dir_list(full_path)
     all_files = list(reversed(all_files))
     return all_files
+
+def timestamp_from_filename(filename)-> pd.Timestamp:
+    """
+    Tries to detect a timestamp from a filename based on common patterns
+    :param filename:
+    :return: Datetime object
+    """
+    # Keep only the basename
+    filename = os.path.basename(filename)
+    # Make sure to convert all spaces and underscores to hyphens
+    filename = filename.replace("_", "-").replace(" ", "-")
+
+    patterns = [
+        "%Y%m%d-%H%M%S"
+    ]
+    for pattern in patterns:
+        try:
+            f = filename[:len(pattern)]  # get only the beginning
+            return pd.to_datetime(f, format=pattern)
+        except ValueError:
+            continue
+    raise ValueError(f"Could not convert {filename} to timestamp")
 
 
 class LoggerSuperclass:

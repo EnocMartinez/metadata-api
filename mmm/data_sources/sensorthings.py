@@ -360,9 +360,11 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
     def inject_to_files(self, df, max_rows=10000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data",
                         tmp_folder_db="/tmp/sta_db_copy/data"):
         """
-        Inject all data in df into the timeseries table via SQL copy
-        """
+        Inject all data in df into the timeseries table via SQL copy. This function expects a DataFrame with the
+        timestamp as index and the following columns:
+            results (file URL), datastream_id, foi_id and parameters (optional dict with additional parameters)
 
+        """
         init = time.time()
         os.makedirs(tmp_folder, exist_ok=True)
         os.chown(tmp_folder, os.getuid(), os.getgid())

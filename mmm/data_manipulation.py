@@ -16,6 +16,7 @@ from mmm.common import qc_flags
 import numpy as np
 import time
 import gc
+from mmm.parallelism import multiprocess
 
 
 def open_csv(csv_file, time_format="%Y-%m-%d %H:%M:%S", time_range=[], format=False) -> pd.DataFrame:
@@ -51,7 +52,7 @@ def open_csv(csv_file, time_format="%Y-%m-%d %H:%M:%S", time_range=[], format=Fa
         df = df[time_range[0]:time_range[1]]
 
     for var in df.columns:
-        if var.endswith("_qc"):
+        if var.endswith("_QC"):
             df[var] = df[var].replace(np.nan, -1)
             df[var] = df[var].astype(np.int8)  # set to integer
             df[var] = df[var].replace(-1, np.nan)
@@ -69,7 +70,7 @@ def get_dataframe_precision(df, check_values=1000, min_precision=-1):
     column_precision = {}
     length = min(check_values, len(df.index.values))
     for c in df.columns:
-        if "_qc" in c:
+        if "_QC" in c:
             continue  # avoid QC columns
         precisions = np.zeros(length, dtype=int)
         for i in range(0, length):
@@ -100,6 +101,33 @@ def delete_vars_from_df(df, vars: list):
     return df
 
 
+def lin_to_log(df: pd.DataFrame, vars: list):
+    """
+    Converts some columns of a dataframe from linear to logarithmic
+    :param df: dataframe
+    :param vars: list of variables to convert
+    :returns: dataframe with convert columns
+    """
+    for var in df.columns:
+        if var in vars:
+            df[var] = 10 * np.log10(df[var])
+    return df
+
+
+def log_to_lin(df: pd.DataFrame, vars: list):
+    """
+    Converts some columns of a dataframe from logarithmic to linear
+    :param df: dataframe
+    :param vars: list of variables to convert
+    :returns: dataframe with convert columns
+    """
+
+    for var in df.columns:
+        if var in vars:
+            df[var] = 10 ** (df[var] / 10)
+    return df
+
+
 def resample_dataframe(df, average_period="30min", std_column=True, log_vars=[], ignore=[]):
     """
     Resamples incoming dataframe, performing the arithmetic mean. If QC control is applied select only values with
@@ -122,10 +150,10 @@ def resample_dataframe(df, average_period="30min", std_column=True, log_vars=[],
     resampled_dataframes = []
     # print("Splitting input dataframe to a dataframe for each variable")
     for var in df.columns:
-        if var.endswith("_qc"):  # ignore qc variables
+        if var.endswith("_QC"):  # ignore qc variables
             continue
 
-        var_qc = var + "_qc"
+        var_qc = var + "_QC"
         df_var = df[var].to_frame()
         df_var[var_qc] = df[var_qc]
 
@@ -136,7 +164,7 @@ def resample_dataframe(df, average_period="30min", std_column=True, log_vars=[],
             rdf[var_qc] = rdf[var_qc].fillna(0).astype(np.int8)
 
         else:
-            var_qc = var + "_qc"
+            var_qc = var + "_QC"
             # Generate a dataframe for good, suspicious and bad data
             df_good = df_var[df_var[var_qc] == qc_flags["good"]]
             df_na = df_var[df_var[var_qc] == qc_flags["not_applied"]]
@@ -179,7 +207,7 @@ def resample_dataframe(df, average_period="30min", std_column=True, log_vars=[],
 
             # Calculate standard deviations
             if std_column:
-                var_std = var + "_std"
+                var_std = var + "_STD"
                 rdf[var_std] = 0
 
                 # assign good data stdev where qc = 1
@@ -199,8 +227,8 @@ def resample_dataframe(df, average_period="30min", std_column=True, log_vars=[],
             # delete suspicious and bad columns
             del rdf[var + "_na"]
             del rdf[var + "_suspicious"]
-            del rdf[var + "_qc_na"]
-            del rdf[var + "_qc_suspicious"]
+            del rdf[var + "_QC_na"]
+            del rdf[var + "_QC_suspicious"]
 
             # delete all unused dataframes
             del df_var
@@ -233,7 +261,7 @@ def resample_dataframe(df, average_period="30min", std_column=True, log_vars=[],
 
     # Set the precisions for the standard deviations (precision + 2)
     for colname, precision in precisions.items():
-        std_var = colname + "_std"
+        std_var = colname + "_STD"
         if std_var in df_out.keys():
             df_out[std_var] = df_out[std_var].round(decimals=(precision+2))
 
@@ -260,10 +288,10 @@ def resample_polar_dataframe(df, magnitude_label, angle_label, units="degrees", 
 
     # column_order = df.columns  # keep the column order
 
-    columns = [col for col in df.columns if not col.endswith("_qc")]  # get columns names (no qc vars)
+    columns = [col for col in df.columns if not col.endswith("_QC")]  # get columns names (no qc vars)
     column_order = []
     for col in columns:
-        column_order += [col, col + "_qc", col + "_std"]
+        column_order += [col, col + "_QC", col + "_STD"]
 
     precisions = get_dataframe_precision(df)
 
@@ -289,7 +317,7 @@ def resample_polar_dataframe(df, magnitude_label, angle_label, units="degrees", 
 
     # Convert all QC flags to int8
     for c in resampled_df.columns:
-        if c.endswith("_qc"):
+        if c.endswith("_QC"):
             resampled_df[c] = resampled_df[c].replace(np.nan, -1)
             resampled_df[c] = resampled_df[c].astype(np.int8)
             resampled_df[c] = resampled_df[c].replace(-1, np.nan)
@@ -299,8 +327,8 @@ def resample_polar_dataframe(df, magnitude_label, angle_label, units="degrees", 
         resampled_df[c] = resampled_df[c].round(decimals=precision)
 
     # delete STD for angle column
-    if angle_label + "_std" in resampled_df.columns:
-        del resampled_df[angle_label + "_std"]
+    if angle_label + "_STD" in resampled_df.columns:
+        del resampled_df[angle_label + "_STD"]
 
     return resampled_df
 
@@ -332,15 +360,15 @@ def polar_to_cartesian(df, magnitude_label, angle_label, units="degrees", x_labe
         del df[magnitude_label]
         del df[angle_label]
 
-    if magnitude_label + "_qc" in df.columns:
+    if magnitude_label + "_QC" in df.columns:
         # If quality control has been applied to the dataframe, add also qc to the cartesian dataframe
         # Get greater QC flag, so both x and y have the most restrictive quality flag in magnitudes / angles
-        df[x_label + "_qc"] = np.maximum(df[magnitude_label + "_qc"].values, df[angle_label + "_qc"].values)
-        df[y_label + "_qc"] = df[x_label + "_qc"].values
+        df[x_label + "_QC"] = np.maximum(df[magnitude_label + "_QC"].values, df[angle_label + "_QC"].values)
+        df[y_label + "_QC"] = df[x_label + "_QC"].values
         # Delete old qc flags
         if delete:
-            del df[magnitude_label + "_qc"]
-            del df[angle_label + "_qc"]
+            del df[magnitude_label + "_QC"]
+            del df[angle_label + "_QC"]
 
     return df
 
@@ -373,14 +401,14 @@ def cartesian_to_polar(df, x_label, y_label, units="degrees", magnitude_label="m
     if delete:
         del df[x_label]
         del df[y_label]
-    if x_label + "_qc" in df.columns:
+    if x_label + "_QC" in df.columns:
         # If quality control has been applied to the dataframe, add also qc to the cartesian dataframe
         # Get greater QC flag, so both x and y have the most restrictive quality flag in magnitudes / angles
-        df[magnitude_label + "_qc"] = np.maximum(df[y_label + "_qc"].values, df[x_label + "_qc"].values)
-        df[angle_label + "_qc"] = df[x_label + "_qc"].values
+        df[magnitude_label + "_QC"] = np.maximum(df[y_label + "_QC"].values, df[x_label + "_QC"].values)
+        df[angle_label + "_QC"] = df[x_label + "_QC"].values
         # Delete old qc flags
-        del df[x_label + "_qc"]
-        del df[y_label + "_qc"]
+        del df[x_label + "_QC"]
+        del df[y_label + "_QC"]
     return df
 
 
@@ -422,10 +450,10 @@ def expand_angle_mean(df, magnitude,  angle, units="degrees"):
     df[angle + "_sin"] = np.sin(angle_rad)*df[magnitude].values
     df[angle + "_cos"] = np.cos(angle_rad)*df[magnitude].values
 
-    if magnitude + "_qc" in df.columns:
+    if magnitude + "_QC" in df.columns:
         # genearte a qc column with the MAX from magnitude qc and angle qc
-        df[angle + "_sin" + "_qc"] = np.maximum(df[angle + "_qc"].values, df[magnitude + "_qc"].values)
-        df[angle + "_cos" + "_qc"] = df[angle + "_sin" + "_qc"].values
+        df[angle + "_sin" + "_QC"] = np.maximum(df[angle + "_QC"].values, df[magnitude + "_QC"].values)
+        df[angle + "_cos" + "_QC"] = df[angle + "_sin" + "_QC"].values
 
     return df
 
