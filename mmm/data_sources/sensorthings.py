@@ -402,7 +402,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         # Update OBSERVATIONs count
         self.update_observations_id_seq()
 
-    def inject_to_inference(self, df, max_rows=10000, tmp_folder="/tmp/sta_db_copy/data",
+    def inject_to_json(self, df, max_rows=10000, tmp_folder="/tmp/sta_db_copy/data",
                             tmp_folder_db="/tmp/sta_db_copy/data"):
         """
         Inject all data in df into the timeseries table via SQL copy
@@ -415,7 +415,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         rich.print("Splitting input dataframe into smaller ones")
         rows = int(max_rows)
         dataframes = slice_dataframes(df, max_rows=rows)
-        files = self.dataframes_to_inference_csv(dataframes, tmp_folder)
+        files = self.dataframes_to_json_csv(dataframes, tmp_folder)
         rich.print("Generating all files took %0.02f seconds" % (time.time() - init))
 
         if self.host != "localhost" and self.host != "127.0.0.1":
@@ -558,17 +558,17 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 files.append(file)
         return files
 
-    def dataframes_to_inference_csv(self, dataframes: list, folder):
+    def dataframes_to_json_csv(self, dataframes: list, folder):
         i = 0
         files = []
         with Progress() as progress:
-            task = progress.add_task("converting data to 'inference' csv", total=len(dataframes))
+            task = progress.add_task("converting data to 'json' csv", total=len(dataframes))
             for dataframe in dataframes:
                 progress.advance(task, 1)
                 file = os.path.join(folder, f"files_copy_{i:04d}.csv")
                 i += 1
                 rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
-                self.format_inference_csv(dataframe, file)
+                self.format_json_csv(dataframe, file)
                 files.append(file)
         return files
 
@@ -847,7 +847,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                  "VALID_TIME_END", "PARAMETERS", "DATASTREAM_ID", "FEATURE_ID", "ID"]]
         df.to_csv(filename, index=False)
 
-    def format_inference_csv(self, df_in, filename):
+    def format_json_csv(self, df_in, filename):
         """
         Takes a dataframe and arranges it accordingly to the OBSERVATIONS table from a SensorThings API, preparing the
         data to be inserted by a COPY statement
@@ -957,7 +957,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
             else:
                 avg = f'and ("PROPERTIES"->>\'fullData\')::boolean = false and "PROPERTIES"->>\'averagePeriod\' = \'{average}\''
         else:
-            avg = ""  # for files, detections and inference it makes no sense to flag the fullData
+            avg = ""  # for files, detections and json it makes no sense to flag the fullData
 
         query = f'''select "ID" from "DATASTREAMS" where
          "SENSOR_ID" = (select "ID" from "SENSORS" where "NAME" = \'{sensor}\') 

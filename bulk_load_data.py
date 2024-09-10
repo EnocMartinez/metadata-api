@@ -25,7 +25,7 @@ if __name__ == "__main__":
     argparser.add_argument("-d", "--detections", help="Detections data", action="store_true")
     argparser.add_argument("-t", "--timeseries", help="Timeseries data", action="store_true")
     argparser.add_argument("-p", "--profiles", help="Profile data", action="store_true")
-    argparser.add_argument("-i", "--inference", help="Inference data", action="store_true")
+    argparser.add_argument("-j", "--json", help="JSON-like data, such as AI-inference data", action="store_true")
     argparser.add_argument("-f", "--files", help="Files data (register the paths)", action="store_true")
     argparser.add_argument("-F", "--foi", help="FeatureOfInterest ID to assign to the Observations", type=int, required=True)
     args = argparser.parse_args()
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     psql_conf = load_fields_from_dict(secrets["sensorthings"], ["database", "user", "host", "port", "password"])
     url = secrets["sensorthings"]["url"]
 
-    if int(args.timeseries) + int(args.profiles) + int(args.detections) + int(args.inference) + int(args.files) != 1:
+    if int(args.timeseries) + int(args.profiles) + int(args.detections) + int(args.json) + int(args.files) != 1:
         raise ValueError("ONE data type must be selected")
 
     if args.profiles:
@@ -47,8 +47,8 @@ if __name__ == "__main__":
         data_type = "detections"
     elif args.timeseries:
         data_type = "timeseries"
-    elif args.inference:
-        data_type = "inference"
+    elif args.json:
+        data_type = "json"
     elif args.files:
         data_type = "files"
     else:

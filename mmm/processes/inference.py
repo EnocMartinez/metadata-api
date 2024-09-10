@@ -60,7 +60,7 @@ def inference_process(sensor: dict, process: dict, mc: MetadataCollector, obs_pr
         description = f"Fish abundance detected from the pictures from camera {sensor_name} at {station}"
         properties = {
             "fullData": True,
-            "dataType": "inference",
+            "dataType": "json",
             "modelName": process_id,
             "weights": process["weights"],
             "trainingConfig": process["trainingConfig"],

@@ -891,7 +891,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "#id": "YOLOv8",
             "name": "YOLOv8l_18sp_2361img",
             "algorithm": "YOLOv8",
-            "type": "inference",
+            "type": "json",
             "description": "YOLOv8 large trained with 18 species, 2361 images, learning rate 0.000375 and image size 1920 px",
             "notes": "Variable names correspond to @variables standard_name field",
             "weights": "https://my.url/file",
@@ -1595,7 +1595,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "foi_id": []
         }
         dates = pd.date_range(start='2023-02-01', end="2023-03-01", freq='30min')
-        datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "FATX", "inference")
+        datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "FATX", "json")
         foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
         for i in range(len(pictures)):
             data["timestamp"].append(dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'))
@@ -1817,28 +1817,27 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     @classmethod
     def tearDownClass(cls):
-        pass
-        # cls.log.info("stopping containers")
-        # run_subprocess("docker compose down")
-        # rich.print("Deleting temporal docker volumes...")
-        # for volume in cls.docker_volumes:
-        #     if os.path.isfile(volume):
-        #         continue  # ignore volume files
-        #
-        #     for f in file_list(volume):
-        #         os.remove(f)
-        #
-        #     # now remove any subdirs
-        #     subdir_list = dir_list(volume)
-        #     subdir_list = list(reversed(sorted(subdir_list)))
-        #     for subdir in subdir_list:
-        #         if os.path.isfile(subdir):
-        #             raise ValueError("This should not happen!")
-        #         os.rmdir(subdir)
-        #
-        # for volume in cls.docker_volumes:
-        #     if os.path.isdir(volume):
-        #         os.rmdir(volume)
+        cls.log.info("stopping containers")
+        run_subprocess("docker compose down")
+        rich.print("Deleting temporal docker volumes...")
+        for volume in cls.docker_volumes:
+            if os.path.isfile(volume):
+                continue  # ignore volume files
+
+            for f in file_list(volume):
+                os.remove(f)
+
+            # now remove any subdirs
+            subdir_list = dir_list(volume)
+            subdir_list = list(reversed(sorted(subdir_list)))
+            for subdir in subdir_list:
+                if os.path.isfile(subdir):
+                    raise ValueError("This should not happen!")
+                os.rmdir(subdir)
+
+        for volume in cls.docker_volumes:
+            if os.path.isdir(volume):
+                os.rmdir(volume)
 
 
 if __name__ == "__main__":

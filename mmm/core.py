@@ -344,7 +344,7 @@ def propagate_metadata_to_sensorthings(mc: MetadataCollector, collections: str, 
                 elif var["dataType"] == "detections":
                     # The process doing the detection should register this variable
                     pass
-                elif var["dataType"] == "inference":
+                elif var["dataType"] == "json":
                     # The process doing the inference should register this variable
                     pass
                 else:
@@ -360,7 +360,7 @@ def propagate_metadata_to_sensorthings(mc: MetadataCollector, collections: str, 
                 if process["type"] == "average":
                     average_process(sensor, process, params, mc, obs_props_ids, sensor_id, thing_id, url, update=update)
 
-                elif process["type"] == "inference":
+                elif process["type"] == "json":
                     inference_process(sensor, process, mc, obs_props_ids, sensor_id, thing_id,
                                       fois[station_doc["defaults"]["@programmes"]], url, update=True)
                 else:
@@ -466,8 +466,8 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
     elif data_type == "files":
         db.inject_to_files(df, tmp_folder=tmp_folder)
 
-    elif data_type == "inference":
-        db.inject_to_inference(df)
+    elif data_type == "json":
+        db.inject_to_json(df)
 
     else:
         raise ValueError("This should never happen!")

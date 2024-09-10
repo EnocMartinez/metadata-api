@@ -47,7 +47,7 @@ mmapi_data_types = [
     # others
     "files",  # arbitrary file-based data, such as audio, pictures or video.
     "detections",  # event detections based from other data. An example is fish detections from a picture
-    "inference"  # Output of an AI algorithm, i.e. a list of detected objects by inference
+    "json"  # JSOn object, such as the output of an AI algorithm, i.e. a list of detected objects by inference
 ]
 
 __data_types__ = {
@@ -270,7 +270,7 @@ __processes = {
     "$id": "mmm:datasets",
     "type": "object",
     "properties": {
-        "type": {"type": "string", "enum": ["average", "inference"]},
+        "type": {"type": "string", "enum": ["average", "json"]},
         "description": {"type": "string"}
     },
     "required": ["type", "description"]
