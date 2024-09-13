@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+"""
+
+author: Enoc Martínez
+institution: Universitat Politècnica de Catalunya (UPC)
+email: enoc.martinez@upc.edu
+license: MIT
+created: 11/6/24
+"""
+
+from argparse import ArgumentParser
+import pandas as pd
+import rich
+import yaml
+
+import mmm
+from mmm import init_metadata_collector, setup_log
+from mmm.common import assert_type
+from mmm.data_manipulation import open_csv
+from mmm.quality_control import dataset_qc
+
+
+def apply_qc(mc: mmm.MetadataCollector, inp, out, sensor_id, plot=False, save="")->pd.DataFrame:
+    """
+    Takes a data file and applies quality control to this file
+    """
+    assert_type(mc, mmm.MetadataCollector)
+
+    sensor = mc.get_document("sensors", sensor_id)
+    rich.print(sensor)
+    qc_conf = {}
+    for var in sensor["variables"]:
+        if "@qualityControl" in var.keys():
+            qc_params = mc.get_document("qualityControl", var["@qualityControl"])
+            qc_conf[var["@variables"]] = {"qartod": qc_params["qartod"]}
+
+    rich.print(qc_conf)
+
+    if inp.endswith(".csv"):
+        opened = False
+        time_formats = [
+            "%Y-%m-%d %H:%M:%S%z",
+            "%Y-%m-%dT%H:%M:%Sz",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y/%m/%d %H:%M:%S",
+            "%d/%m/%Y %H:%M:%S"
+        ]
+        for time_format in time_formats:
+            try:
+                rich.print(f"[cyan]Opening with time format {time_format}")
+                df = open_csv(inp, time_format=time_format)
+                opened = True
+                rich.print("[green]CSV opened!")
+                break
+            except ValueError:
+                rich.print(f"[yellow]Could not parse time with format '{time_format}'")
+                continue
+        if not opened:
+            raise ValueError("Could not open CSV file!")
+    else:
+        raise ValueError("Extensions Not implemented")
+
+    df = dataset_qc(mc, sensor, df, show=plot, paralell=True)
+    print(df)
+    rich.print(f"storing CSV...")
+    df.to_csv(out)
+
+
+if __name__ == "__main__":
+    argparser = ArgumentParser()
+    argparser.add_argument("input", type=str, help="input file", default="")
+    argparser.add_argument("output", type=str, help="output file", default="")
+    argparser.add_argument("sensor", type=str, help="sensor", default="")
+    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets-test.yaml")
+    args = argparser.parse_args()
+
+    log = setup_log("qc")
+
+    with open(args.secrets) as f:
+        secrets = yaml.safe_load(f)["secrets"]
+    print("init...")
+    mc = init_metadata_collector(secrets, log=log)
+
+    args = argparser.parse_args()
+    apply_qc(mc, args.input, args.output, args.sensor)
