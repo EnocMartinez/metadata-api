@@ -9,7 +9,7 @@ license: MIT
 created: 21/09/2023
 """
 from argparse import ArgumentParser
-from mmm import MetadataCollector, CkanClient, propagate_metadata_to_sensorthings, setup_log
+from mmm import MetadataCollector, CkanClient, propagate_metadata_to_sensorthings, setup_log, init_data_collector
 import yaml
 from mmm.metadata_collector import init_metadata_collector
 
@@ -23,11 +23,12 @@ if __name__ == "__main__":
     with open(args.secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
     collections = args.collections.split(",")
-    mc = init_metadata_collector(secrets)
+    log = setup_log("MCtoSTA")
+    dc = init_data_collector(secrets, log)
 
     url = secrets["sensorthings"]["url"]
     auth = ()
     if "api_user" in secrets["sensorthings"].keys() and "api_password" in secrets["sensorthings"].keys():
         auth = (secrets["sensorthings"]["api_user"],secrets["sensorthings"]["api_password"])
 
-    propagate_metadata_to_sensorthings(mc, collections, url, auth=auth)
+    propagate_metadata_to_sensorthings(dc, collections, url, auth=auth)

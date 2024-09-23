@@ -173,7 +173,7 @@ def compoare_fs_to_db(db_data, fs_data) -> list:
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
-    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets-test.yaml")
+    argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets.yaml")
     argparser.add_argument("-g", "--get", help="Get all metadata from a database and stores it to JSON files", action="store_true")
     argparser.add_argument("-p", "--put", help="Puts all metadata from folder and  and stores it to JSON", action="store_true")
     argparser.add_argument("-S", "--status", help="Shows documents that have been modified", action="store_true")
