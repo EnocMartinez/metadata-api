@@ -10,7 +10,7 @@ created: 27/10/23
 """
 import logging
 import pandas as pd
-from mmm import MetadataCollector, CkanClient, SensorThingsApiDB
+from mmm import MetadataCollector, CkanClient, SensorThingsApiDB, DataCollector
 import rich
 from mmm.common import load_fields_from_dict, YEL, RST
 from mmm.data_manipulation import open_csv, drop_duplicated_indexes
@@ -33,6 +33,7 @@ def get_properties(doc: dict, properties: list) -> dict:
     data = {}
     for p in properties:
         data[p] = doc[p]
+
     return data
 
 
@@ -171,14 +172,14 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
                                   groups=groups)
 
 
-def propagate_metadata_to_sensorthings(mc: MetadataCollector, collections: str, url, update=True, auth=()):
+def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url, update=True, auth=()):
     """
     Propagates info at MetadataCollctor the SensorThings API
     """
 
-    assert (type(mc) is MetadataCollector)
+    assert (type(dc) is DataCollector)
     assert (type(collections) is list)
-
+    mc = dc.mc
     if auth:
         set_sta_basic_auth(auth[0], auth[1])
 
@@ -214,7 +215,11 @@ def propagate_metadata_to_sensorthings(mc: MetadataCollector, collections: str, 
             description = doc["description"]
             keys = ["longName", "serialNumber", "instrumentType", "manufacturer", "model"]
             properties = get_properties(doc, keys)
+            if "properties" in doc.keys():
+                for key, value in doc["properties"].items():
+                    properties[key] = doc["properties"][key]
             s = Sensor(name, description, metadata="", properties=properties)
+            rich.print(properties)
             s.register(url, update=update, verbose=True)
             sensor_ids[sensor_id] = s.id
 

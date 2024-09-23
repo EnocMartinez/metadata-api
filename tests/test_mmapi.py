@@ -897,7 +897,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "weights": "https://my.url/file",
             "trainingConfig": "https://my.url/filex",
             "trainingData": "",
-            "variable_names": [
+            "variableNames": [
                 "Chromis chromis",
                 "Diplodus vulgaris",
                 "Diver"
