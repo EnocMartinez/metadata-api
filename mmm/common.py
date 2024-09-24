@@ -141,12 +141,13 @@ def timestamp_from_filename(filename)-> pd.Timestamp:
     # Make sure to convert all spaces and underscores to hyphens
     filename = filename.replace("_", "-").replace(" ", "-")
 
-    patterns = [
-        "%Y%m%d-%H%M%S"
-    ]
-    for pattern in patterns:
+    patterns = {
+        "%Y%m%d-%H%M%S": "20201231-235959",
+        "%Y-%m-%dT%H:%M:%S": "2020-12-31T23:59:59"
+    }
+    for pattern, example in patterns.items():
         try:
-            f = filename[:len(pattern)]  # get only the beginning
+            f = filename[:len(example)]  # get only the beginning
             return pd.to_datetime(f, format=pattern)
         except ValueError:
             continue

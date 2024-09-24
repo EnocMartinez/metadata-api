@@ -19,7 +19,6 @@ import matplotlib.pyplot as plt
 import os
 import numpy as np
 from ioos_qc.config import QcConfig
-from ioos_qc.results import collect_results
 from mmm import MetadataCollector
 from mmm.common import assert_type, assert_types
 
@@ -88,76 +87,45 @@ def save_figure(fig, varname, test_name, df, folder="qc_output"):
     fig.savefig(filename)
 
 
-def show_qc_results(qc_results, varname, df, save="", limits={}, tests=[]):
-    """
-    Prepares plots to show the results. Crates some figures with matplotlib
-    :param qc_results: structure with QC results
-    :param varname: variable name
-    :param df: dataframe with data
-    :param save: flag to determine if the plot should be saved to a file
-    :param limits: if set, set the y limits for the variable e.g. {"temperature": [10,40]}
-    :return:
-    """
-    df_var = df.copy(deep=True)
-    figures = []
-    for var in df_var.columns:
-        if var != varname:
-            del df_var[var]
+def save_qc_results(qc_results, varname, df_in, save=""):
+    df = df_in.copy(deep=True)
     for test_name in qc_results["qartod"].keys():
-        df_var[test_name] = qc_results["qartod"][test_name].astype(np.int8)
-        if test_name not in tests and "all" not in tests:
-            continue
+        df[test_name] = qc_results["qartod"][test_name].astype(np.int8)
+
         fig, ax = plt.subplots(1, 1, figsize=(20, 10), sharex=False)
-        figures.append(fig)
         for flag in qc_flags.keys():
-            df_flag = df_var[df_var[test_name] == qc_flags[flag]]
+            df_flag = df[df[test_name] == qc_flags[flag]]
             flag_count = len(df_flag.index.values)
             if flag_count <= 0:
                 continue
-            percent = 100 * flag_count / len(df_var.index.values)
+            percent = 100 * flag_count / len(df.index.values)
             label = flag + " (%.02f%%, %d points)" % (percent, len(df_flag.index.values))
 
             ax.scatter(x=df_flag.index.values, y=df_flag[varname].values, color=__qc_colors[flag], marker='o',
                        s=__qc_sizes[flag], label=label)
 
-        if varname in limits.keys():
-            ax.set_ylim(limits[varname])
         ax.grid()
         ax.legend()
         ax.set_title(test_name)
-        fig.canvas.manager.set_window_title(varname + "_" + test_name +
-                                            "_" + df_var[test_name].index.values[0].astype(str)[:10])
-        if save:
-            save_figure(fig, varname, test_name, df_var, folder=save)
-            plt.close(fig)
+        fig.canvas.manager.set_window_title(
+            varname + "_" + test_name + "_" + df[test_name].index.values[0].astype(str)[:10]
+        )
 
-    if "good_data" in tests:
-        # Plot with Good Data only
-        fig, ax = plt.subplots(1, 1, figsize=(20, 10), sharex=False)
-        fig.canvas.manager.set_window_title(varname + "_" + "good_data" +
-                                            "_" + df_var[test_name].index.values[0].astype(str)[:10])
-        figures.append(fig)
-        df_good = df_var[df_var["aggregate"] == qc_flags["good"]]
-        ax.scatter(x=df_good.index.values, y=df_good[varname].values, color="green", marker='o', s=0.5,
-                   label=varname + " good data only")
-        if varname in limits.keys():
-            ax.set_ylim(limits[varname])
+        date = np.datetime_as_string(df.index.values[0], unit="M")
+        filename = varname + "_" + test_name + "_" + date + ".png"
+        directory = os.path.join(save, varname, test_name)
+        os.makedirs(directory, exist_ok=True)
 
-        ax.legend()
-        ax.grid()
+        filename = os.path.join(directory, filename)
+        plt.legend(loc="lower right")
+        fig.savefig(filename)
+        plt.close(fig)
 
-        if save:
-            save_figure(fig, varname, "good_data", df_var, folder=save)
-            # close saved figures and free space
-            for fig in figures:
-                plt.close(fig)
-                gc.collect()  # collect with garbage collector
-
-        del df_var
-        gc.collect()  # collect with garbage collector
+    del df
+    gc.collect()  # collect with garbage collector
 
 
-def dataframe_qc(df, config, varname, aggregate_qc=True, qc_suffix="_QC", show=False, save=True, limits={}, tests=[]):
+def dataframe_qc(df, config, varname, aggregate_qc=True, qc_suffix="_QC", save=""):
     """
     Applies Quality Control to the dataframe according to the configuration.
     :param df: input dataframe
@@ -189,8 +157,8 @@ def dataframe_qc(df, config, varname, aggregate_qc=True, qc_suffix="_QC", show=F
     # Store aggregate results (final qc flags) in the same structure
     qc_results["qartod"]["aggregate"] = np.ma.maximum.reduce(results, axis=0)
 
-    if show or save:
-        show_qc_results(qc_results, varname, df, save=save, limits=limits, tests=tests)
+    if save:
+        save_qc_results(qc_results, varname, df, save)
 
     if aggregate_qc:
         df[varname + qc_suffix] = qc_results["qartod"]["aggregate"].astype(np.int8)
@@ -201,7 +169,7 @@ def dataframe_qc(df, config, varname, aggregate_qc=True, qc_suffix="_QC", show=F
     return df
 
 
-def apply_qc(df, qc_config: dict, show=False, save="", var_list=[], limits={}, tests=[]):
+def apply_qc(df, qc_config: dict, save=""):
     """
     Apply quality control to a dataframe
     :return: dataframe with QC flags
@@ -222,30 +190,17 @@ def apply_qc(df, qc_config: dict, show=False, save="", var_list=[], limits={}, t
                     qc_elements[varname] = qc_config[obs_prop_name]
 
     for variable_name, variable_config in qc_elements.items():
-        show_var = False
-        save_var = False
-        if variable_name in var_list:
-            if show:
-                show_var = True
-            if save:
-                save_var = save
-
-        df = dataframe_qc(df, variable_config, varname=variable_name, show=show_var, save=save_var, limits=limits,
-                          tests=tests)
+        df = dataframe_qc(df, variable_config, varname=variable_name, save=save)
         qc_applied[variable_name] = True
 
     for variable, applied in qc_applied.items():
         if not qc_applied[variable]:
             df[variable + "_QC"] = 2
-
-    if show:
-        plt.show()
     gc.collect()
     return df
 
 
-def dataset_qc(mc: MetadataCollector, sensor: str | dict, df: pd.DataFrame, show=False, save="", varlist=[], tests=[],
-               limits: dict = {}, paralell=False):
+def dataset_qc(mc: MetadataCollector, sensor: str | dict, df: pd.DataFrame, save="", paralell=False):
     init = time.time()
     assert_type(mc, MetadataCollector)
     assert_types(sensor, [str, dict])
@@ -270,17 +225,12 @@ def dataset_qc(mc: MetadataCollector, sensor: str | dict, df: pd.DataFrame, show
             rich.print(f"[yellow]No QC found for '{varname}'!")
             pass
 
-    if "all" in varlist or not varlist:  # if empty or explicitly all
-        varlist = list(df.columns)
-
-    rich.print(f"[magenta]show={show} save={save}")
-
     if paralell:
         rich.print("[cyan]Applying Quality Control (multiprocessing)...")
         dataframes = slice_dataframes(df, frequency="M")  # generate a dataframe for each month
         argument_list = []
         for df in dataframes:
-            argument_list.append((df, qc_config, show, save, varlist, limits, tests))
+            argument_list.append((df, qc_config, save))
 
         t = time.time()
         qc_dataframes = multiprocess(argument_list, apply_qc, max_workers=20)
@@ -291,7 +241,7 @@ def dataset_qc(mc: MetadataCollector, sensor: str | dict, df: pd.DataFrame, show
         gc.collect()
     else:
         rich.print("[cyan]Applying Quality Control (single process)...")
-        apply_qc(df, qc_config, show, save, varlist, limits, tests)
+        apply_qc(df, qc_config, save)
 
     rich.print("[cyan]QC took %.02f seconds" % (time.time() - init))
     return df

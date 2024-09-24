@@ -13,7 +13,11 @@ __pycache__/
 # C extensions
 *.so
 .idea
-
+Metadata
+*.tar.gz
+tests/*
+temp
+*.nc
 # Distribution / packaging
 .Python
 build/

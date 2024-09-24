@@ -13,7 +13,9 @@ import logging
 import os
 import shutil
 import socket
+import numpy as np
 from .common import run_subprocess, LoggerSuperclass, BLU, run_over_ssh
+from .parallelism import threadify
 
 
 def is_absolute_path(path):
@@ -132,6 +134,50 @@ class FileServer(LoggerSuperclass):
             self.info(f"rsync from {self.host}:{remote_file} to {local_file}")
 
         return local_file
+
+    def bulk_send(self, sources, destinatinos):
+        """
+        Sends several files using threads to speed up data transmissions
+        :param source:
+        :param dest:
+        :return:
+        """
+        assert len(sources) == len(destinatinos)
+        # First let's make sure that all required directories exist
+
+        directories = [os.path.dirname(f) for f in destinatinos]
+        directories = list(np.unique(directories))
+
+        # Now create all the directories
+        self.info(f"Bulk send {len(destinatinos)} files")
+        self.info(f"creating {len(directories)} directories...")
+        run_over_ssh(self.host, f"mkdir -p {' '.join(directories)}", fail_exit=True)
+        self.info(f"Sending {len(sources)} file using threads")
+
+        # now, let's group files by destination folder to increase the speed of rsync
+
+        files = {} # key will be the rsync target (probably a directory), value a list of files
+                   # if several files go to the same folder: "my/dir": ["my/dir/file1", "my/dir/file2"]
+        for src, dst in zip(sources, destinatinos):
+            # If basename are not the same, we have to transmit it individually
+            if os.path.basename(src) != os.path.basename(dst):
+                files[dst] = [src]
+            else:
+                directory = os.path.dirname(dst)
+                if directory not in files.keys():
+                    files[directory] = [src]
+                else:
+                    files[directory].append(src)
+
+        args = []
+        for dst, src in files.items():
+            cmd = f"rsync {' '.join(src)} {self.host}:{dst}"
+            args.append([cmd, False])
+
+        threadify(args, run_subprocess, text="sending files...")
+
+
+
 
 
 def send_file(src_file: str, dest_folder: str, host: str, dry_run=False) -> str:

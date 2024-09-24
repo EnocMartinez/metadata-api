@@ -95,6 +95,14 @@ class DataCollector(LoggerSuperclass):
         else:
             conf = dataset
 
+        if not time_start and not time_end:
+            # No time range supplied, trying to extract it from the dataset constraints
+            try:
+                trange = conf["constraints"]["timeRange"]
+                time_start, time_end = trange.split("/")
+            except KeyError:
+                raise ValueError("Time range not supplied and could not be found in datasets contraints")
+
         if type(time_start) is str:
             time_start = pd.Timestamp(time_start)
         if type(time_end) is str:

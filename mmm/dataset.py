@@ -9,6 +9,7 @@ license: MIT
 created: 12/6/24
 """
 import logging
+from datetime import datetime
 
 import jsonschema
 import pandas as pd
@@ -17,7 +18,7 @@ from .schemas import dataset_exporter_conf, mmm_schemas
 from .fileserver import FileServer, send_file
 from emso_metadata_harmonizer import erddap_config
 import time
-from mmm.common import validate_schema, LoggerSuperclass, CYN, GRN, assert_type
+from mmm.common import validate_schema, LoggerSuperclass, CYN, GRN, assert_type, run_over_ssh, run_subprocess
 import logging
 
 
@@ -125,6 +126,55 @@ class DatasetObject(LoggerSuperclass):
         # configure erddap using the emso_metadata_harmonizer tool
         erddap_config(self.filename, self.erddap_dataset_id, dataset_path, datasets_xml_file=datasets_xml)
         self.erddap_configured = True
+
+    def configure_erddap_remotely(self, datasets_xml, big_parent_directory="", erddap_uid=None, erddap_datasets_path="/datasets"):
+        """
+        This configures a remote erddap, the same as configure_erddap, but uses scp to get the datasets.xml file
+        and then to send it back to the server hosting the erddap.
+        :param datasets_xml: path to the ERDDAPs datasets.xml file
+        :param dataset_path: Path where the datasets will be stored. May differ from filesystem path since erddap is
+                             dockerized.
+        :param big_parent_directory: ERDDAP's big parent directory, used to create a hard flag for auto-reload
+        :param erddap_datasets_path: path where all the datasets are accessed from the ERDDAP's point of view. If ERDDAP
+                                     is containerized this is the path within the container.
+        :return:
+        """
+
+        # Step 1: Create a remote copy of datasets.xml
+        self.info("Creating a remote copy of datasets.xml")
+        t = datetime.now()
+        now = datetime.now().strftime("%Y%m%d_%H%M%S")
+        basename = "." + os.path.basename(datasets_xml).replace(".xml", "_") + now  + ".bckp"
+        self.info(f"Creating a remote copy of datasets.xml -> {basename}")
+        bckp_file = os.path.join(os.path.dirname(datasets_xml), basename)
+        run_over_ssh(self.exporter.host, f"cp {datasets_xml} {bckp_file}")
+
+        # Step 2: Download the datasets.xml to temp folder
+        self.info("Downloading datasets.xml")
+        local_datasets_xml = os.path.join("temp", os.path.basename(datasets_xml))
+        os.makedirs("temp", exist_ok=True)
+        run_subprocess(f"scp {self.exporter.host}:{datasets_xml} {local_datasets_xml}", fail_exit=True)
+
+        # Step 3: call the erddap_config from emso_metadata_harmonizer tool
+        self.info("Configuring datasets.xml with emso_metadata_harmonizer")
+        self.configure_erddap(local_datasets_xml, os.path.join(erddap_datasets_path, self.dataset_id))
+
+        # Step 4: send back the datasets.xml to the server
+        self.info("Sending back the datasets.xml")
+        run_subprocess(f"scp {local_datasets_xml} {self.exporter.host}:{datasets_xml}", fail_exit=True)
+
+        # Step 5: force dataset reload remotely
+        if big_parent_directory and erddap_uid:
+            remote_dataset_hard_flag = os.path.join(big_parent_directory, "hardFlag", self.dataset_id)
+            # Brute force approach!  touch file as another user
+            cmd = f"sudo -u \\#{erddap_uid} touch {remote_dataset_hard_flag}"
+            run_over_ssh(self.exporter.host, cmd, fail_exit=True)
+            self.info("Hard flag set remotely! dataset should be available soon")
+        else:
+            self.warning("ERDDAP big parent directory not set, ERDDAP must be reloaded manually!")
+
+        # All done!
+
 
     def reload_erddap_dataset(self, big_parent_directory):
         """

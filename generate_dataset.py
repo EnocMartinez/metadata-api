@@ -41,9 +41,19 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
     log = setup_log("sta_to_emso")
     mc = init_metadata_collector(secrets, log=log)
     dc = DataCollector(secrets, log, mc=mc)
-    datasets = dc.generate_dataset(dataset_id, service_name, tstart, tend, fmt=format)
+    datasets = dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format)
     for dataset in datasets:
         dataset.deliver()
+    dataset = datasets[-1]
+
+    if service_name == "erddap":
+        log.info("Trying to autoconfigure ERDDAP dataset (using last dataset)")
+        dataset.configure_erddap_remotely(
+            secrets["erddap"]["datasets_xml"],
+            big_parent_directory = secrets["erddap"]["big_parent_directory"],
+            erddap_uid=secrets["erddap"]["uid"]
+        )
+
 
 def list_datasets(secrets, verbose=False):
     with open(secrets) as f:
@@ -64,7 +74,6 @@ if __name__ == "__main__":
     argparser.add_argument("--list", help="List registered datasets and exit", action="store_true")
     argparser.add_argument("-v", "--verbose", help="verbose output", action="store_true")
     argparser.add_argument("-o", "--output", help="Folder where datasets will be stored", type=str, default="")
-    argparser.add_argument("-c", "--ckan", help="Export to CKAN", action="store_true")
     argparser.add_argument("-F", "--force", help="Overwrite any existing dataset", action="store_true")
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
                            default="secrets.yaml")
@@ -76,6 +85,9 @@ if __name__ == "__main__":
 
     argparser.add_argument("-f", "--format",type=str,  required=False, default="",
                            help="Suggest format such as netcdf, csv, etc. May not work for all datasets")
+    argparser.add_argument("-e", "--reload-erddap",action="store_true", default="",
+                           help="Reload ERDDAP dataset")
+
 
     args = argparser.parse_args()
 
@@ -87,10 +99,11 @@ if __name__ == "__main__":
         rich.print("[red]Arguments no valid: dataset_id and service must be defined!")
         exit(1)
 
-    if not args.time_range:
-        rich.print(f"[red]Time range for dataset not specified!!")
-        exit(1)
+    if args.time_range:
+        tstart, tend = args.time_range.split("/")
+    else:
+        tstart = ""
+        tend = ""
 
-    tstart, tend = args.time_range.split("/")
     generate_dataset(args.dataset_id, args.service, tstart, tend,  args.output, args.secrets, format=args.format)
 
