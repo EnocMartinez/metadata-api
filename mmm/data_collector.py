@@ -76,7 +76,10 @@ class DataCollector(LoggerSuperclass):
 
         dataset_id = dataset["#id"]
         os.makedirs(tmp_folder, exist_ok=True)
-        filename = dataset_id + "_" + tstart.strftime("%Y%m%d") + "_" + tend.strftime("%Y%m%d") + extensions[fmt]
+        filename = dataset_id
+        if tstart.strftime("%Y%m%d") not in filename:
+            filename +=  "_" + tstart.strftime("%Y%m%d") + "_" + tend.strftime("%Y%m%d")
+        filename += extensions[fmt]
         return os.path.join(tmp_folder, filename)
 
     def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str,
@@ -172,9 +175,14 @@ class DataCollector(LoggerSuperclass):
         assert_type(time_start, pd.Timestamp)
         assert_type(time_end, pd.Timestamp)
         conf = dataset
+
+        self.debug(f"Generating dataset file from {time_start} to {time_end}")
+        self.debug(f"Exporting to {service_name}")
+
         # Convert service ID to dict
         if service_name not in conf["export"].keys():
             raise ValueError(f"Dataset {conf['#id']} doesn't have export configuration for service '{service_name}'")
+
         service = conf["export"][service_name]
 
         # check the dataset constraints
@@ -184,10 +192,10 @@ class DataCollector(LoggerSuperclass):
 
             if ctime_start > time_start:
                 time_start = ctime_start
-                rich.print(f"[yellow]WARNING: Dataset constraint Forces start time to {ctime_start}")
+                self.warning(f"[yellow]WARNING: Dataset constraint Forces start time to {ctime_start}")
             if ctime_end < time_end:
                 time_end = ctime_end
-                rich.print(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
+                self.warning(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
         # Generate the dataset filename
         if not fmt:
             fmt = service["format"]
@@ -403,6 +411,7 @@ class DataCollector(LoggerSuperclass):
         :param station: to minimize query time, let the option to pass the station
         :return: generated NetCDF filename
         """
+        self.debug("Creating NetCDF dataset")
         station = self.mc.get_document("stations", conf["@stations"])
         variables = []  # by default all variables will be used
         if "@variables" in conf.keys():
@@ -413,12 +422,16 @@ class DataCollector(LoggerSuperclass):
 
         for sensor_name in conf["@sensors"]:
             self.info(f"Getting {sensor_name} data from {time_start} to {time_end}")
+
             sensor = self.mc.get_document("sensors", sensor_name)
             df = self.dataframe_from_sta(conf, station, sensor, time_start, time_end)
+
             dataframes.append(df)
             # Get the real time start/time end
             m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
             metadata.append(m)
+
+
 
         if all([df.empty for df in dataframes]):
             self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skpping")
@@ -463,20 +476,27 @@ class DataCollector(LoggerSuperclass):
 
         # First step, get all files indexed in the SensorThings database
         datastream_ids = []
-        for sensor in conf["@sensors"]:
-            sensor_id = self.sta.sensor_id_name[sensor]
-            # Get the Datastream ID of the files
-            df = self.sta.dataframe_from_query(f'''
-            select
-                "ID" from "DATASTREAMS" 
-            where 
-                "PROPERTIES"->>'dataType' = 'files'
-                and "SENSOR_ID" = {sensor_id}; 
-            ''', debug=False)
-            files_ids = df["ID"].values  # convert dataframe to list
+        #for sensor in conf["@sensors"]:
+        if len(conf["@sensors"])!=1:
+            raise ValueError("ZIP dataset with multiple sensors not supported")
 
-            for i in files_ids:
-                datastream_ids.append(str(i))
+        sensor = conf["@sensors"][0]
+        sensor_id = self.sta.sensor_id_name[sensor]
+        # Get the Datastream ID of the files
+        df = self.sta.dataframe_from_query(f'''
+        select
+            "ID" from "DATASTREAMS" 
+        where 
+            "PROPERTIES"->>'dataType' = 'files'
+            and "SENSOR_ID" = {sensor_id}; 
+        ''', debug=False)
+        files_ids = df["ID"].values  # convert dataframe to list
+
+        for i in files_ids:
+            datastream_ids.append(str(i))
+
+        if len(datastream_ids) == 0:
+            raise ValueError(f"No valid Datastreams found for sensor={sensor} with dataType=files")
 
         # Now let's query for all registered files in the database matching the datastreams
         df = self.sta.dataframe_from_query(f'''
@@ -486,7 +506,7 @@ class DataCollector(LoggerSuperclass):
             and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
         ''', debug=False)
 
-        files = list(df["files"].values)  # List of all files to be compressed
+        files = list(df["files"])  # List of all files to be compressed
         if len(files) < 1:
             raise ValueError(f"No files to be zipped!")
         elif len(files) == 1:
@@ -498,12 +518,13 @@ class DataCollector(LoggerSuperclass):
 
         # Try to remove path until the sensor name
         basepath = detect_common_path(files)
-        self.debug(f"Base path for all files is {basepath}")
-        # If common prefix goes beyond the sensor name, shorten it, we want to keep the sensor name
-        if sensor.lower() not in basepath.lower():
-            idx = basepath.lower().find(sensor.lower())
-            basepath = basepath[:idx]
-        rich.print(f"Final base path for all files is {basepath}")
+        self.debug(f"all files start with path: '{basepath}'")
+        # Find until the sensor name and keep it in the files
+        idx = basepath.find(sensor)
+        if idx < 0:
+            raise ValueError(f"sensor_name='{sensor}' not in basepath='{basepath}'!")
+        basepath = basepath[:idx]  # basepath
+        self.info(f"Base path for the dataset is {basepath}")
 
         # Erase basepath, so we keep the basepath
         files = [f.replace(basepath, "") for f in files]
@@ -512,8 +533,6 @@ class DataCollector(LoggerSuperclass):
         for i in range(len(files)):
             if files[i].startswith("/"):
                 files[i] = files[i][1:]
-
-        file_type = files[0].split(".")[-1]
 
         # If the command is too long it cannot be sent via ssh and will raise an OSError, we create a temporal script
         # with the command and send it to the host
@@ -545,9 +564,7 @@ class DataCollector(LoggerSuperclass):
         run_over_ssh(self.fileserver.host, f"rm {remote_filename}")
         # delete local file
         os.remove(script_name)
-
         run_over_ssh(self.fileserver.host, f"rm {script_dest}")
-
         return filename
 
     def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list,
@@ -585,7 +602,6 @@ class DataCollector(LoggerSuperclass):
             roles.append(role)
 
         # Put funding information
-
         project_names = []
         project_codes = []
         if "funding" in dataset.keys():
@@ -593,14 +609,12 @@ class DataCollector(LoggerSuperclass):
                 project = self.mc.get_document("projects", project_id)
                 project_names.append(project["acronym"])
                 project_codes.append(project["funding"]["grantId"])
-
         # Get the OceanSITES Data Mode
         data_mode = default_data_mode
         if "dataMode" in dataset.keys():
             data_mode = dataset["dataMode"]
         data_mode_dict = {"real-time": "R", "delayed": "D", "mixed": "M", "provisional": "P"}
         dm = data_mode_dict[data_mode]
-
         # global attributes
         gl = {
             "*title": dataset["title"],
@@ -632,7 +646,6 @@ class DataCollector(LoggerSuperclass):
                     found = True
             if not found:
                 raise LookupError(f"variable {var_id} not found in sensor {sensor['#id']}!")
-
         var_metadata = {}
         for variable in variables:
             var_id = variable["#id"]
@@ -643,13 +656,17 @@ class DataCollector(LoggerSuperclass):
                 "~standard_name": variable["standard_name"],
                 "~standard_name_uri": variable["standard_name"]
             }
-
         sensor_metadata = {
             "*sensor_model_uri": sensor["model"]["definition"],
             "*sensor_serial_number": sensor["serialNumber"],
             "$sensor_mount": "mounted_on_fixed_structure",
             "$sensor_orientation": "upward"
         }
+
+        unknown = "http://vocab.nerc.ac.uk/collection/L22/current/TOOLZZZ/"
+        if not sensor_metadata["*sensor_model_uri"]:
+            self.warning("Sensor model not defined! setting to unknown (SDN::L22:TOOLZZZ")
+            sensor_metadata["*sensor_model_uri"] = unknown
 
         latitude, longitude, depth = self.mc.get_station_position(station["#id"], tstart)
         coordinates = {

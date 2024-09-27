@@ -66,18 +66,24 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
         ckan_organizations = ckan.get_organization_list()
         rich.print(ckan_organizations)
 
+        registered_orgs = ckan.get_organization_list()
+        rich.print(f"registered organizations: {registered_orgs}")
+
         for doc in mc.get_documents("organizations"):
             name = doc["#id"]
             image_url = ""
+
             if "public" in doc.keys() and doc["public"]:
                 organization_id = doc["#id"].lower()
                 title = doc["fullName"]
                 extras = load_fields_from_dict(doc, ["ROR", "EDMO"])
-
                 if "logoUrl" in doc.keys():
                     image_url = doc["logoUrl"]
 
-                ckan.organization_create(organization_id, name, title, extras=extras, image_url=image_url)
+                update = False
+                if organization_id in registered_orgs:
+                    update = True
+                ckan.organization_create(organization_id, name, title, extras=extras, image_url=image_url, update=update)
             else:
                 rich.print(f"[yellow]ignoring private organization {name}...")
 
@@ -134,7 +140,12 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
                 "sensors": ", ".join(sensors)
             }
             owner = ""
+            # Assign projects to datasets using gruops
             groups = []
+            if "funding" in doc.keys():
+                for project_id in doc["funding"]["@projects"]:
+                    groups.append(project_id.lower())
+
             # process contacts
             for contact in doc["contacts"]:
                 role = contact["role"]

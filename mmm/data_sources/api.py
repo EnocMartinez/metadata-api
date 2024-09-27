@@ -19,10 +19,21 @@ _api_cache = {}
 
 sta_auth = ()
 
+verify_ssl = True
 
 def set_sta_basic_auth(user, password):
     global sta_auth
     sta_auth = (user, password)
+
+
+def set_verify_ssl(verify: bool):
+    """
+    Enables or disables the verification of SSL in requests
+    :param verify: True / False
+    :return:
+    """
+    global verify_ssl
+    verify_ssl = verify
     
 
 def strip_nans(mydict: dict) -> dict:
@@ -183,7 +194,7 @@ def sensorthings_post(url, data, endpoint="", header={"Content-type": "applicati
 
     if verbose:
         print("POSTing to URL", url)
-    http_response = requests.post(url, data, headers=header, auth=sta_auth)
+    http_response = requests.post(url, data, headers=header, auth=sta_auth, verify=verify_ssl)
 
     if verbose:
         print_http_response(http_response)
@@ -225,7 +236,7 @@ def sensorthings_patch(url, data, endpoint="", header={"Content-type": "applicat
 
     if verbose:
         print("POSTing to URL", url)
-    http_response = requests.patch(url, data, headers=header, auth=sta_auth)
+    http_response = requests.patch(url, data, headers=header, auth=sta_auth, verify=verify_ssl)
 
     if verbose:
         print_http_response(http_response)
@@ -249,7 +260,7 @@ def sensorthings_get(baseurl, endpoint="", header={"Content-type": "application/
     if endpoint and baseurl[-1] != "/":
         baseurl = baseurl + "/"
     url = baseurl + endpoint
-    http_response = requests.get(url, headers=header, auth=sta_auth)
+    http_response = requests.get(url, headers=header, auth=sta_auth, verify=verify_ssl)
     if http_response.status_code > 300:
         print_http_response(http_response)
         raise ValueError("HTTP ERROR")
@@ -317,7 +328,7 @@ class AbstractSensorThings:
         data = self.serialize()
         if verbose:
             rich.print(f"[blue]{data}")
-        http_response = requests.post(url, data, headers=header, auth=sta_auth)
+        http_response = requests.post(url, data, headers=header, auth=sta_auth, verify=verify_ssl)
         if verbose:
             print(http_response.text)
         check_http_status(http_response)
@@ -335,7 +346,7 @@ class AbstractSensorThings:
         """
         headers = {"Content-Type": "application/json"}
         data = self.serialize()
-        http_response = requests.patch(self.selfLink, data=data, headers=headers, auth=sta_auth)
+        http_response = requests.patch(self.selfLink, data=data, headers=headers, auth=sta_auth, verify=verify_ssl)
         check_http_status(http_response)
 
     def register(self, baseurl, duplicate=True, verbose=False, update=False):
@@ -392,7 +403,7 @@ class AbstractSensorThings:
 
         if cache and entity_url not in _api_cache.keys():
             url = entity_url + "?$top=10000"
-            http_response = requests.get(url, auth=sta_auth)
+            http_response = requests.get(url, auth=sta_auth, verify=verify_ssl)
             check_http_status(http_response)
             registered_elements = json.loads(http_response.text)
             _api_cache[entity_url] = json.loads(http_response.text)
@@ -767,7 +778,7 @@ class DataArray(AbstractSensorThings):
         header = {"Content-type": "application/json; charset=utf-8"}
         url = url + "/" + "CreateObservations"
         data = self.serialize()
-        http_response = requests.post(url, data, headers=header, auth=sta_auth)
+        http_response = requests.post(url, data, headers=header, auth=sta_auth, verify=verify_ssl)
         check_http_status(http_response)
         resp = json.loads(http_response.text)
         responses = []

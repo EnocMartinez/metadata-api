@@ -13,14 +13,14 @@ from argparse import ArgumentParser
 from mmm import DataCollector, setup_log
 import yaml
 import rich
-
-from mmm.common import assert_type
+import logging
+from mmm.common import RED, RST
 from mmm.metadata_collector import init_metadata_collector
 import os
 
 
 def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_end: str, out_folder: str, secrets,
-                     format:str= "") -> list:
+                     format:str= "", verbose=False) -> list:
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -39,9 +39,18 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
         secrets = yaml.safe_load(f)["secrets"]
 
     log = setup_log("sta_to_emso")
+    if verbose:
+        log.setLevel(logging.DEBUG)
+
     mc = init_metadata_collector(secrets, log=log)
     dc = DataCollector(secrets, log, mc=mc)
     datasets = dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format)
+
+    if len(datasets) == 0:
+        log.error(RED + "No datasets generated!" + RST)
+        exit()
+
+    log.info(f"Generated {len(datasets)} data files")
     for dataset in datasets:
         dataset.deliver()
     dataset = datasets[-1]
@@ -105,5 +114,6 @@ if __name__ == "__main__":
         tstart = ""
         tend = ""
 
-    generate_dataset(args.dataset_id, args.service, tstart, tend,  args.output, args.secrets, format=args.format)
+    generate_dataset(args.dataset_id, args.service, tstart, tend,  args.output, args.secrets, format=args.format,
+                     verbose=args.verbose)
 

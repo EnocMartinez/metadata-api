@@ -792,13 +792,15 @@ class MetadataCollector(LoggerSuperclass):
         else:
             self.info(f"  =) =) Congratulations! You have a healthy database (= (=\n")
 
-    def get_station_position(self, station_name, timestamp) -> (float, float, float):
+    def get_station_position(self, station_name: str, timestamp: pd.Timestamp) -> (float, float, float):
         """
         Returns (latitude, longitude, depth) for a station at a particular time. It looks for all deployments of a
         station and selects the one immediately before the selected time.
         """
+        self.debug(f"Getting activities with applied to {station_name}")
         sql_filter = f" where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@stations' = '{station_name}'"
         hist = self.get_documents("activities", sql_filter)
+        self.debug(f"Got {len(hist)} activities")
         data = {
             "time": [],
             "latitude": [],
@@ -811,24 +813,29 @@ class MetadataCollector(LoggerSuperclass):
             data["longitude"].append(dep["where"]["position"]["longitude"])
             data["depth"].append(dep["where"]["position"]["depth"])
 
+        self.debug(f"Creating dataframe with deployemnts")
         df = pd.DataFrame(data)
-        df["time"] = pd.to_datetime(df["time"])
+        df["time"] = pd.to_datetime(df["time"], utc=True)
         df = df.set_index("time")
         df = df.sort_index(ascending=False)
+        df = df.reset_index()
+
+        self.debug(f"Loking for deployment previous to {timestamp}")
+
+        if timestamp.tz is None:
+            self.warning(f"Timestamp {timestamp} without timezone! forcing UTC")
+            timestamp = timestamp.tz_localize("UTC")
+
+        # Force 00:00:00
+        timestamp = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Loop backwards in deployments to get the first deployment before the timestamp
         for idx, row in df.iterrows():
-            # If timezone is not present, force UTC
-            if idx.tz is None:
-                idx = idx.tz_localize("UTC")
-            tsamp = pd.Timestamp(timestamp)
-            if tsamp.tz is None:
-                tsamp = tsamp.tz_localize("UTC")
-            # Compare
-            if tsamp >= idx:
+            if timestamp >= row["time"].replace(hour=0, minute=0, second=0, microsecond=0):
+                self.debug(f'Found deployement lat={row["latitude"]} lon={row["longitude"]} depth={row["depth"]}')
                 return row["latitude"], row["longitude"], row["depth"]
 
-        raise LookupError(f"Deployment for station={station_name} not found!")
+        raise LookupError(f"Deployment for station={station_name} before {timestamp} not found, only found={data['time']}")
 
     def drop_all(self):
         """

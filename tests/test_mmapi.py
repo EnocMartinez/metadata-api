@@ -905,6 +905,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "ignore": [
                 "Diver"
             ],
+            "rename": {},
             "parameters": {}
         }  # YOLOv8 process
         post_json(self.mmapi_url + "/processes", d)
@@ -1007,7 +1008,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             ],
             "@stations": "OBSEA",
             "dataType": "timeseries",
-            "dataSource": "sensorthings",
             "dataSourceOptions": {
                 "fullData": True
             },
@@ -1059,7 +1059,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             ],
             "@stations": "OBSEA",
             "dataType": "timeseries",
-            "dataSource": "sensorthings",
             "dataSourceOptions": {
                 "fullData": False,
                 "averagePeriod": "30min"
@@ -1108,7 +1107,6 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                 "IPC608"
             ],
             "@stations": "OBSEA",
-            "dataSource": "filesystem",
             "dataSourceOptions": {
                 "host": "localhost"
             },
@@ -1147,7 +1145,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
 
     def test_20_propagate_to_sensorthings(self):
         """Propagate metadata from Metadata DB to SensorThingsAPI"""
-        propagate_metadata_to_sensorthings(self.mc, [], self.conf["sensorthings"]["url"], update=True)
+        propagate_metadata_to_sensorthings(self.dc, [], self.conf["sensorthings"]["url"], update=True)
 
         # Make sure that we have defaultFeatureOfInterest
         self.dc.sta.get_datastream_id("AWAC", "OBSEA", "CDIR", "profiles", "30min")
@@ -1818,26 +1816,26 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
     @classmethod
     def tearDownClass(cls):
         cls.log.info("stopping containers")
-        run_subprocess("docker compose down")
-        rich.print("Deleting temporal docker volumes...")
-        for volume in cls.docker_volumes:
-            if os.path.isfile(volume):
-                continue  # ignore volume files
-
-            for f in file_list(volume):
-                os.remove(f)
-
-            # now remove any subdirs
-            subdir_list = dir_list(volume)
-            subdir_list = list(reversed(sorted(subdir_list)))
-            for subdir in subdir_list:
-                if os.path.isfile(subdir):
-                    raise ValueError("This should not happen!")
-                os.rmdir(subdir)
-
-        for volume in cls.docker_volumes:
-            if os.path.isdir(volume):
-                os.rmdir(volume)
+        # run_subprocess("docker compose down")
+        # rich.print("Deleting temporal docker volumes...")
+        # for volume in cls.docker_volumes:
+        #     if os.path.isfile(volume):
+        #         continue  # ignore volume files
+        #
+        #     for f in file_list(volume):
+        #         os.remove(f)
+        #
+        #     # now remove any subdirs
+        #     subdir_list = dir_list(volume)
+        #     subdir_list = list(reversed(sorted(subdir_list)))
+        #     for subdir in subdir_list:
+        #         if os.path.isfile(subdir):
+        #             raise ValueError("This should not happen!")
+        #         os.rmdir(subdir)
+        #
+        # for volume in cls.docker_volumes:
+        #     if os.path.isdir(volume):
+        #         os.rmdir(volume)
 
 
 if __name__ == "__main__":

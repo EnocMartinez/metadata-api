@@ -244,7 +244,7 @@ class CkanClient:
         url = self.url + "organization_list"
         return self.ckan_get(url)
 
-    def organization_create(self, group_id:str, name: str, title:str, description="", image_url="", extras=[]):
+    def organization_create(self, group_id:str, name: str, title:str, description="", image_url="", extras=[], update=False):
         """
         Creates a group (project) in CKAN
         +info: https://docs.ckan.org/en/2.9/api/index.html#ckan.logic.action.create.group_create
@@ -254,6 +254,7 @@ class CkanClient:
         :param description: grop's description (optional)
         :param image_url: group's image (optinal)
         :param extras: additional key-value pairs
+        :param update: if True, instead of post (create) an existing organization will be patched
         :return:
         """
         group_data = {
@@ -266,6 +267,8 @@ class CkanClient:
         }
 
         url = self.url + "organization_create"
+        if update:
+            return self.ckan_patch(url, group_data)
         return self.ckan_post(url, group_data)
 
     # ---------------- GROUPS ---------------- #

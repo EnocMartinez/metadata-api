@@ -219,7 +219,10 @@ class DataExporter(LoggerSuperclass):
         self.period = conf["period"]
         self.host = conf["host"]
         self.format = conf["format"]
-        if dataset_id not in conf["path"]:
+
+        if self.period.lower() == "none":
+            self.path = conf["path"]
+        elif dataset_id not in conf["path"]:
             self.path = os.path.join(conf["path"], dataset_id)
         else:
             self.path = conf["path"]

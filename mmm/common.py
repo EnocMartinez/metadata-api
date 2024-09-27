@@ -339,7 +339,6 @@ def detect_common_path(paths):
     """
     Returns the common prefix in a list of strings
     """
-    rich.print(paths)
     path_splits = [p.split("/") for p in paths]  # list of lists of paths
     i = -1
     loop = True

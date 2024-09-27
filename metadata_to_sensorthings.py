@@ -11,12 +11,15 @@ created: 21/09/2023
 from argparse import ArgumentParser
 from mmm import MetadataCollector, CkanClient, propagate_metadata_to_sensorthings, setup_log, init_data_collector
 import yaml
+
+from mmm.data_sources.api import set_verify_ssl
 from mmm.metadata_collector import init_metadata_collector
 
 if __name__ == "__main__":
     argparser = ArgumentParser()
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets.yaml")
     argparser.add_argument("-c", "--collections", help="Only use certain collections (comma-separated list)", default="all")
+    argparser.add_argument("--skip-ssl", help="Skips SSL verification", action="store_true")
 
     args = argparser.parse_args()
     
@@ -30,5 +33,9 @@ if __name__ == "__main__":
     auth = ()
     if "api_user" in secrets["sensorthings"].keys() and "api_password" in secrets["sensorthings"].keys():
         auth = (secrets["sensorthings"]["api_user"],secrets["sensorthings"]["api_password"])
+
+    if args.skip_ssl:
+        log.info("Disable SSL verify")
+        set_verify_ssl(False)
 
     propagate_metadata_to_sensorthings(dc, collections, url, auth=auth)

@@ -55,13 +55,6 @@ __data_types__ = {
     "enum": mmapi_data_types
 }
 
-__data_sources__ = {
-    "type": "string",
-    "enum": [
-        "sensorthings",  # regular SensorThings database
-        "filesystem"     # files in a directory tree in the filesystem, like year/month/day/myfile.txt
-    ]
-}
 
 # ----------- Conventions ------------ #
 __doi_roles__ = [  # Roles for dataset attribution from MetadataKernel
@@ -73,7 +66,6 @@ __doi_roles__ = [  # Roles for dataset attribution from MetadataKernel
     "Distributor",
     # Institution tasked with responsibility to generate/disseminate copies of  the resource in either electronic or print form
     "Editor",  # A person who oversees the details related to the publication format of the resource
-    "ProjectLeader",  # Person officially designated as head of project team or sub-project team instrumental
     "HostingInstitution",
     # Typically, the organisation allowing the resource to be available on the internet through the provision of its hardware/software/operating support     "Researcher", # A person involved in analysing data or the results of an experiment or formal study
     "ProjectLeader",
@@ -361,7 +353,6 @@ __datasets = {
             }
         },
         "dataType": __data_types__,  # may be redundant, but helps parsing info
-        "dataSource": __data_sources__,
         "dataSourceOptions": {"type": "object"},
         "dataMode": {"type": "string", "enum": ["real-time", "delayed", "mixed", "provisional"]},
         "export": {
@@ -386,8 +377,7 @@ __datasets = {
             "required": ["@projects"]
         }
     },
-    "required": ["title", "summary", "@stations", "@sensors", "dataType", "dataSource", "contacts", "dataSourceOptions",
-                 "export"]
+    "required": ["title", "summary", "@stations", "@sensors", "dataType",  "contacts", "dataSourceOptions", "export"]
 }
 
 __activities = {
@@ -501,6 +491,7 @@ __units = {
 __resource_type = [
     "boat",   # small boat
     "research_vessel",   # large research vessel used in oceanographic cruises
+    "vessel_of_opportunity",   # large research vessel used in oceanographic cruises
     "equipment",
     "infrastructure",    # element that is considered an infrastructure, such as a junction box
     "other"       #
