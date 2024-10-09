@@ -44,10 +44,10 @@ This API is heavily influenced by the SensorThings API, but has some major diffe
 Sensors produce data. Datasets compile data from sensors, easy enough. 
 
 Data coming from sensors is archived depending on the Sensor's data type. Available data types are:
-* **timeseries**: fixed-point timeseries. Stored in `timeseries` hypertable
+* **timeseries**: timeseries data. Stored in `timeseries` hypertable
 * **profile**: depth-dependant timeseries. Stored in `profiles` hypertable
-* **average**: data from `timeseries` or `profiles` that has been averaged over a period of time. They are stored in the`"OBSERVATIONS"` table.
-* **files**: File-based sensor. Files can be any multimedia type, such as audio, video, pictures, etc. Each file has an entry in the `"OBSERVATIONS"` table 
+* **detections**: number of events detected in a time, e.g. AI-based detections on a picture. Stored in `detections` hypertable
+* **files**: File-based sensor. Files can be any multimedia type, such as audio, video, pictures, etc. Each file has an entry in the regular SensorThings `OBSERVATIONS` table 
 
 Trajectory data is stored as regular timeseries data, where the latitude, longitude and depth are treated as timeseries and compiled later.
 ### Processes ###
@@ -57,7 +57,22 @@ Every sensor may have a set of "processes" associated. Currently, the associated
 
 
 ### Features Of Interest ###
-Features Of Interest (FOIs) are matched to Stations (Things). So every station must have one FOI with the same name.
+Features Of Interest (FOIs) are matched to a particular monitoring programme.
+
+
+# Marine Metadata API #
+
+In marine metadata api (mmapi) metadata schema, there are the following elements:
+* **sensors**:  
+* **stations**: 
+* **variables**: variables that are measured
+* **units**: units of measurement
+* **people**: Persons
+* **organizations**: institutions, companies or other legal entities
+* **projects**: Research projects 
+* **activities**: An event applied to a sensor/platform at a particular time, e.g. deployment, recovery, maintenance...
+* **operations**: Collections of events in a timeframe, e.g. oceanographic campaign
+
 
 ### Contact info ###
 

@@ -191,8 +191,6 @@ class CkanClient:
         else:
             rich.print(f"Registering new resource '{resource_id}'...")
             url = self.url + "resource_create"
-            print(url)
-            rich.print(datadict)
             return self.ckan_post(url, datadict)
 
 

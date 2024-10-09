@@ -60,7 +60,8 @@ def process(key: str, value: any, mc: MetadataCollector):
 if __name__ == "__main__":
     argparser = ArgumentParser()
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
-                           default="secrets-test.yaml")
+                           default="secrets.yaml")
+    argparser.add_argument("--contents-only", required=False, action="store_true")
     argparser.add_argument("collection", help="new identifier", type=str)
     argparser.add_argument("old", help="old identifier", type=str)
     argparser.add_argument("new", help="new identifier", type=str)
@@ -76,24 +77,28 @@ if __name__ == "__main__":
     new = args.new
     collection = args.collection
 
-    rich.print(f"Update identifier '{old}' to '{new}' in collection '{args.collection}'")
-    doc = ensure_element(args.collection, old, mc)
+    if not args.contents_only:
+        rich.print(f"Update identifier '{old}' to '{new}' in collection '{args.collection}'")
+        doc = ensure_element(args.collection, old, mc)
 
-    doc_ids = mc.get_identifiers(collection)
-    if new in doc_ids:
-        raise ValueError(f"doc '{collection}/{new}' already exists!")
+        old_doc = doc.copy()
+        doc_ids = mc.get_identifiers(collection)
+        if new in doc_ids:
+            raise ValueError(f"doc '{collection}/{new}' already exists!")
 
-    # Update the id in the document
-    doc["#id"] = new
-    # Manually insert the document
-    ValueError("Unimplemented for PostgresQL!")
-    #mc.db[collection].insert_one(doc.copy())  # use copy to avoid pymongo to modify original dict
-    # Insert in history
-    #mc.db_history[collection].insert_one(doc.copy())  # use copy to avoid pymongo to modify original dict
+        # Update the id in the document
+        doc["#id"] = new
+
+        mc.insert_document(collection, doc)
+        mc.delete_document(collection, old)
+
+    local_file = f"Metadata/metadata/{collection}/{old}.json"
+    if os.path.exists(local_file):
+        rich.print(f"removing local file {local_file}")
+        os.remove(local_file)
 
     # Now check the schemas to get
     schemas = mmm.schemas.mmm_schemas
-
     modify = []
 
     for current_collection, schema in schemas.items():
@@ -111,17 +116,10 @@ if __name__ == "__main__":
             rich.print(f"updating {col}/{doc['#id']}")
             doc_str = json.dumps(doc)
             if old in doc_str:
-                new_doc_str = doc_str.replace(old, new)
+                new_doc_str = doc_str.replace(f'"{old}"', f'"{new}"')
                 rich.print(new_doc_str)
                 new_doc = json.loads(new_doc_str)
                 mc.replace_document(col, new_doc["#id"], new_doc)
 
-    rich.print("deleting old document...")
     mc.delete_document(args.collection, old)
-
-
-
-
-
-
 

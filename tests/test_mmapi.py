@@ -619,9 +619,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "time": "2023-01-01T00:00:00Z",
             "type": "deployment",
             "appliedTo": {
-                "@sensors": [
-                    "SBE37"
-                ]
+                "@sensors": "SBE37"
             },
             "where": {
                 "@stations": "OBSEA"
@@ -635,9 +633,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "time": "2022-01-01T00:00:00Z",
             "type": "deployment",
             "appliedTo": {
-                "@sensors": [
-                    "SBE16"
-                ]
+                "@sensors": "SBE16"
             },
             "where": {
                 "@stations": "OBSEA"
@@ -822,9 +818,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "time": "2023-01-01T00:00:00Z",
             "type": "deployment",
             "appliedTo": {
-                "@sensors": [
-                    "AWAC"
-                ]
+                "@sensors": "AWAC"
             },
             "where": {
                 "@stations": "OBSEA"
@@ -966,7 +960,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
             "time": "2023-01-01T00:00:00Z",
             "type": "deployment",
             "appliedTo": {
-                "@sensors": ["IPC608"]
+                "@sensors": "IPC608"
             },
             "where": {
                 "@stations": "OBSEA"

@@ -163,16 +163,9 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
 
             for contact in station["contacts"]:
                 role = contact["role"]
-                if "@people" in contact.keys():
-                    name = mc.get_people(contact["@people"])["name"]
-                elif "@organizations" in contact.keys():
-                    name = mc.get_organization(contact["@organizations"])["fullName"]
+                if "@organizations" in contact.keys():
                     if role == "owner":  # assign the owner organization
                         owner = contact["@organizations"].lower()
-                if role not in extras.keys():
-                    extras[role] = name
-                else:
-                    extras[role] += ", " + name
 
             groups = []  # assign to ckan groups
             if "funding" in doc.keys():
@@ -279,6 +272,10 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
         rich.print(f"[green]Creating Datastreams for sensor {sensor['#id']}")
         sensor_name = sensor["#id"]
         sensor_deployments = get_sensor_deployments(mc, sensor["#id"])
+        rich.print(sensor_deployments)
+        if not sensor_deployments:
+            rich.print(f"[yellow]WARNING: no deployments for sensor '{sensor_name}'")
+            continue
         if len(sensor_deployments) < 1:
             raise ValueError(f"Sensor {sensor['#id']} does not have a deployment!")
         stations_processed = []

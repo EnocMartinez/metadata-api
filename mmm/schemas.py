@@ -148,8 +148,9 @@ def __people_with_roles__(roles: list):
 __activity_type__ = [
     "deployment",  # Deployment of a instrument, platform or resource
     "recovery",  # recovery a previously deployed asset
-    "cleaning",  # cleaning of a sensor, probably removing biofouling
     "maintenance",  # operation to ensure the proper functionality of an asset, such as replacing broken parts
+    "inspection",   # operation to inspect the status of an asset
+    "calibration",
     "test",  # activity to test the proper functionality of a sensor/platform/resource
     "other"
 ]
@@ -394,15 +395,22 @@ __activities = {
         "appliedTo": {
             "type": "object",
             "properties": {
-                "@sensors": __string_list__,
-                "@stations": {"type": "string"},  # only one station per activitiy
-                "@resources": __string_list__
+                "@sensors": {"type": "string",  "minLength": 2},
+                "@stations": {"type": "string",  "minLength": 2},
+                "@resources": {"type": "string",  "minLength": 2}
             }
+        },
+        "fieldOfView": {
+            # This is used to record a camera looking at a particular position
+            "properties": {
+                "@resources": {"type": "string"},
+            },
+            "required": ["@resources"]
         },
         "where": {
             "type": "object",
             "properties": {
-                "@stations": {"type": "string"},
+                "@stations": {"type": "string",  "minLength": 2},
                 "position": __coordinates__
             },
             "required": []

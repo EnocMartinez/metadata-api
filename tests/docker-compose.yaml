@@ -78,7 +78,7 @@
 
     erddap:
       container_name: erddap-mmapi-test
-      image: axiom/docker-erddap:2.18
+      image: axiom/docker-erddap:2.24-jdk21-openjdk
       restart: unless-stopped
       hostname: erddap-test
       ports:

@@ -133,6 +133,7 @@ class MetadataCollector(LoggerSuperclass):
         port = connection["db_port"]
         db_name = connection["db_name"]
         self.db_name = db_name
+        self.db_hist_name = db_name + "_hist"
         db_user = connection["db_user"]
         db_password = connection["db_password"]
         print(db_name, db_user, host)
@@ -140,7 +141,7 @@ class MetadataCollector(LoggerSuperclass):
         try:
             self.info(f"Connecting to database '{db_name}'...")
             self.db = PgDatabaseConnector(host, port, db_name, db_user, db_password, log)
-            self.db_hist = PgDatabaseConnector(host, port, db_name + "_hist", db_user, db_password, log, autocommit=True)
+            self.db_hist = PgDatabaseConnector(host, port, self.db_hist_name, db_user, db_password, log, autocommit=True)
             self.info("Database ok")
         except psycopg2.OperationalError:
             self.info(f"Database not initialized! creating '{db_name}'")
@@ -150,7 +151,7 @@ class MetadataCollector(LoggerSuperclass):
             self.__init_database()
             self.db.close()
             self.db = PgDatabaseConnector(host, port, db_name, db_user, db_password, log)
-            self.db_hist = PgDatabaseConnector(host, port, db_name + "_hist", db_user, db_password, log)
+            self.db_hist = PgDatabaseConnector(host, port, self.db_hist_name, db_user, db_password, log)
         self.__init_tables()
         self.info("Database initialized")
 
@@ -173,9 +174,9 @@ class MetadataCollector(LoggerSuperclass):
             self.info(f"Creating database {self.db_name}")
             self.db.exec_query(f"create database {self.db_name};", fetch=False)
 
-        if not self.db.check_if_database_exists(self.db_name + "_hist"):
-            self.info(f"Creating database {self.db_name + '_hist'}")
-            self.db.exec_query(f"create database {self.db_name + '_hist'};", fetch=False)
+        if not self.db.check_if_database_exists(self.db_hist_name):
+            self.info(f"Creating database {self.db_hist_name}")
+            self.db.exec_query(f"create database {self.db_hist_name};", fetch=False)
 
     def __init_tables(self):
         """
@@ -887,7 +888,7 @@ def get_station_deployments(mc: MetadataCollector, station: dict) -> list:
     return deployments
 
 
-def get_sensor_deployments(mc: MetadataCollector, sensor_id: str, station="") -> list:
+def get_sensor_deployments(mc: MetadataCollector, sensor_id: str) -> list:
     """
     Looks for all stations where a sensor has been deployed. If t
         [
@@ -899,23 +900,16 @@ def get_sensor_deployments(mc: MetadataCollector, sensor_id: str, station="") ->
     assert type(mc) is MetadataCollector
     assert type(sensor_id) is str
     # Get all activities with type=deployment and involving this sensor
-    sql_filter = f" where doc->>'type' = 'deployment'"
+    sql_filter = f" where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@sensors' = '{sensor_id}'"
     deployments = mc.get_documents("activities", filter=sql_filter)
     sensor_deployments = []
     for dep in deployments:
         if "@sensors" in dep["appliedTo"].keys() and sensor_id in dep["appliedTo"]["@sensors"]:
-
             # We can have the station in "where" or in "appliedTo"
-            if "@stations" in dep["where"].keys():
-                station = dep["where"]["@stations"]
-                deployment_time = dep["time"]
-                sensor_deployments.append((station, deployment_time))
-            elif "@stations" in dep["appliedTo"].keys():
-                station = dep["appliedTo"]["@stations"]
-                deployment_time = dep["time"]
-                sensor_deployments.append((station, deployment_time))
-            else:
-                raise ValueError(f"Wrong deployment format! {dep['#id']}")
+            if "@stations" not in dep["where"].keys():
+                raise ValueError("Error in activity {dep['#id']} sensor deployment without where->@stations field")
+
+            sensor_deployments.append((dep["where"]["@stations"], dep["time"]))
 
     sensor_deployments = sorted(sensor_deployments, key=lambda x: x[1])
     return sensor_deployments

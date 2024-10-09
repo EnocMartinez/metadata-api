@@ -236,12 +236,12 @@ if __name__ == "__main__":
 
     if args.get:
         init = time.time()
-        rich.print(f"Getting all data from database {mc.database_name} and storing to {folder}...", end="")
+        rich.print(f"Getting all data from database {mc.db_name} and storing to {folder}...", end="")
         db_data = load_from_database(mc, subset=collections, verbose=args.verbose)
         store_to_filesystem(db_data, folder, verbose=args.verbose, subset=collections, history=False)
         rich.print("[green]ok!")
 
-        rich.print(f"Getting all data from database {mc.history_database_name} and storing to {folder_hist}...", end="")
+        rich.print(f"Getting all data from database {mc.db_hist_name    } and storing to {folder_hist}...", end="")
         db_data = load_from_database(mc, subset=collections, verbose=args.verbose, history=True)
         store_to_filesystem(db_data, folder_hist, verbose=args.verbose, subset=collections, history=True)
         rich.print("[green]ok!")
