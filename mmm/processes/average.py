@@ -15,7 +15,7 @@ from mmm.data_sources.api import Datastream
 
 
 def average_process(sensor: dict, process: dict, parameters: dict, mc: MetadataCollector, obs_props_ids: dict,
-                    sensor_id: int, thing_id: int, url: str, update=True):
+                    sensor_id: int, thing_id: int, url: str, fois: dict, update=True):
     """
     Register the Datastreams for an average process
     """
@@ -23,7 +23,7 @@ def average_process(sensor: dict, process: dict, parameters: dict, mc: MetadataC
     sensor_name = sensor["#id"]
     sensor_deployments = get_sensor_deployments(mc, sensor_name)
     for station, deployment_time in sensor_deployments:
-
+        station_doc = mc.get_document("stations", station)
         period = parameters["period"]
         for var in sensor["variables"]:
             varname = var["@variables"]
@@ -43,6 +43,7 @@ def average_process(sensor: dict, process: dict, parameters: dict, mc: MetadataC
                     "dataType": data_type,
                     "averagePeriod": period,
                     "averageFrom": ds_full_data_name,
+                    "defaultFeatureOfInterest": fois[station_doc["defaults"]["@programmes"]]
                 }
 
                 ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties)

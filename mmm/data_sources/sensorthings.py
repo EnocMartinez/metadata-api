@@ -66,7 +66,9 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         self.sensor_id_name = {}  # key: sensor id, value: name
         self.thing_id_name = {}  # key: sensor id, value: name
         self.datastream_name_id = {}  # key: datastream name, value: datastream id
-        self.obs_prop_name_id = {}  # key: observed property name, value: observed property id
+        self.obs_prop_name_id = {}  # key: observe  d property name, value: observed property id
+        self.datastream_fois = {}  # key datastream_id , value: datastream's default foi
+        self.datastream_properties = {}
 
         # dictionaries where key is ID and value is name
         self.sensor_name_id = {}
@@ -91,10 +93,16 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         # DATASTREAM -> SENSOR relation
         query = """
             select "DATASTREAMS"."ID" as datastream_id, "SENSORS"."ID" as sensor_id, "SENSORS"."NAME" as sensor_name, 
-            "DATASTREAMS"."NAME" as datastream_name
+            "DATASTREAMS"."NAME" as datastream_name, "DATASTREAMS"."PROPERTIES" as properties
             from "DATASTREAMS", "SENSORS" 
             where "DATASTREAMS"."SENSOR_ID" = "SENSORS"."ID" order by datastream_id asc;"""
         df = self.dataframe_from_query(query)
+
+        for idx, row in df.iterrows():
+            if "defaultFeatureOfInterest" in row["properties"].keys():
+                self.datastream_fois[row["datastream_id"]] = row["properties"]["defaultFeatureOfInterest"]
+
+            self.datastream_properties[row["datastream_id"]] = row["properties"]
 
         # key: datastream_id ; value: sensor name
         self.datastream_id_sensor_name = dataframe_to_dict(df, "datastream_id", "sensor_name")
@@ -111,8 +119,6 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         # OBS_PROPERTY NAME -> OBS_PROPERTY ID
         df = self.dataframe_from_query('select "ID", "NAME" from "OBS_PROPERTIES";')
         self.obs_prop_name_id = dataframe_to_dict(df, "NAME", "ID")
-
-        self.datastream_properties = self.get_datastream_properties()
 
         # dictionaries where key is ID and value is name
         self.sensor_name_id = reverse_dictionary(self.sensor_id_name)

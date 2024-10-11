@@ -80,7 +80,7 @@ def get_datastream_id(datastream: dict):
     if "@iot.id" in datastream.keys():
         return datastream["@iot.id"]
     elif "name" in datastream.keys():
-        return app.db.datastreams_ids[datastream["name"]]
+        return app.db.datastream_name_id[datastream["name"]]
     else:
         raise ValueError("Can't get DatastreamID for this query, no iot.id nor name!")
 
@@ -181,7 +181,7 @@ def expand_element(resp, parent_element, expanding_key, opts):
             list_data =  app.db.timescale.get_profiles_data(datastream_id, top=opts["top"], skip=opts["skip"], debug=False, format="list",
                                         filters=opts["filter"], orderby=opts["orderBy"])
 
-        observation_list = format_observation_list(list_data, foi_id, datastream_id, opts)
+        observation_list = format_observation_list(list_data, foi_id, datastream_id, opts, data_type)
         datastream["Observations@iot.nextLink"] = generate_next_link(len(list_data), opts, datastream_id)
         datastream["Observations@iot.navigatioinLink"] = app.sta_base_url + f"/Datastreams({datastream_id})/Observations"
         datastream["Observations"] = observation_list

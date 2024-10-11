@@ -264,20 +264,19 @@ def run_subprocess(cmd, fail_exit=False):
     else:
         cmd_list = cmd.split(" ")
     proc = subprocess.run(cmd_list, capture_output=True)
+    stdout = proc.stdout.decode()
     if proc.returncode != 0:
         rich.print(f"\n[red]ERROR while running command '{cmd}'")
         if proc.stdout:
             rich.print(f"subprocess stdout:")
-            rich.print(f">[bright_black]    {proc.stdout.decode()}")
+            rich.print(f">[bright_black]    {stdout}")
         if proc.stderr:
             rich.print(f"subprocess stderr:")
             rich.print(f">[bright_black] {proc.stderr.decode()}")
 
         if fail_exit:
             raise ValueError(f"command failed: '{cmd_list}'")
-
-        return False
-    return True
+    return stdout
 
 
 def __get_field(doc: dict, key: str):
@@ -442,8 +441,23 @@ def validate_schema(doc: dict, schema: dict, errors: list, verbose=False) -> lis
     except jsonschema.ValidationError as e:
         txt = f"[red]Document='{doc['#id']}' not valid for schema '{schema['$id']}'[/red]. Cause: {e.message}"
         errors.append(txt)
-        if verbose:
-            rich.print(txt)
+
+    # Now apply custom rules
+    if schema["$id"] == "mmm:activities":
+        # Sensor deployments must be attached to a station
+        if "@sensors" in doc["appliedTo"].keys() and doc["type"] == "deployment":
+            if "where" not in doc.keys() or "@stations" not in doc["where"].keys():
+                errors.append(f"[red]Document='{doc['#id']}' sensor deployment MUST reference a station!")
+
+        # Stations deployments must have a position
+        if "@stations" in doc["appliedTo"].keys() and doc["type"] == "deployment":
+            if "where" not in doc.keys() or "position" not in doc["where"].keys():
+                errors.append(f"[red]Document='{doc['#id']}' station deployment MUST have GPS coordinates!")
+
+    if verbose and errors:
+        for e in errors:
+            rich.print(e)
+
     return errors
 
 

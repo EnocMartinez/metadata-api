@@ -371,7 +371,8 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                 thing_id = things_ids[station]
 
                 if process["type"] == "average":
-                    average_process(sensor, process, params, mc, obs_props_ids, sensor_id, thing_id, url, update=update)
+                    average_process(sensor, process, params, mc, obs_props_ids, sensor_id, thing_id, url, fois,
+                                    update=update)
 
                 elif process["type"] == "json":
                     inference_process(sensor, process, mc, obs_props_ids, sensor_id, thing_id,
@@ -467,7 +468,7 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
             }
             db.inject_to_profiles(df, datastreams, tmp_folder=tmp_folder)
         else:  # averaged profiles
-            datastreams_conf = db.get_datastream_config(sensor=sensor_name, data_type=data_type, average=average)
+            datastreams_conf = db.get_datastream_config(sensor=sensor_name, data_type=data_type, average_period=average)
             datastreams = {
                 row["variable_name"]: row["datastream_id"] for _, row in datastreams_conf.iterrows()
             }
