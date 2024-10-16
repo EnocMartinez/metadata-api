@@ -345,11 +345,13 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                     units_doc = mc.get_document("units", units)
                     ds_units = load_fields_from_dict(units_doc, ["name", "symbol", "definition"])
                     properties = {
-                        "dataType": "files"
+                        "dataType": "files",
+                        "defaultFeatureOfInterest": fois[station_doc["defaults"]["@programmes"]]
                     }
                     if "@qualityControl" in var.keys():
                         qc_doc = mc.get_document("qualityControl", var["@qualityControl"])
                         properties["qualityControl"] = qc_doc["qartod"]
+
 
                     ds = Datastream(ds_name, ds_name, ds_units, thing_id, obs_prop_id, sensor_id, properties=properties,
                                     observation_type="OM_Observation")

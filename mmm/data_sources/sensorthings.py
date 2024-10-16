@@ -838,7 +838,13 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         df["VALID_TIME_START"] = np.nan
         df["VALID_TIME_END"] = np.nan
         if "parameters" in df.columns:
-            df["PARAMETERS"] = df["parameters"]
+            values = []
+            for v in df["parameters"].values:
+                # Force JSON structures to be like: "{\"key\": \"value\"}"
+                v = v.replace("'", "\"")
+                values.append(v)
+
+            df["PARAMETERS"] = values
         else:
             df["PARAMETERS"] = np.nan
         df["DATASTREAM_ID"] = df["datastream_id"]

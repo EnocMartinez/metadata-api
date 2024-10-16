@@ -537,6 +537,8 @@ def drop_duplicated_indexes(df, store_dup="", keep="first"):
     """
     dup_idx = df[df.index.duplicated(keep=keep)]
     total_idx = len(df.index.values)
+    dupdf = df[df.index.duplicated()]
+    print(dupdf)
     if len(dup_idx.index) > 0:
         print("Found %d duplicated entries (%.04f %%)" % (len(dup_idx.index), 100 * len(dup_idx) / total_idx))
         if store_dup:
