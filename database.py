@@ -44,9 +44,14 @@ if __name__ == "__main__":
         pr_count = db.value_from_query('SELECT count(*) from profiles;')
         pr_size = db.value_from_query("SELECT hypertable_size('profiles');")
 
+        dt_count = db.value_from_query('SELECT count(*) from detections;')
+        dt_size = db.value_from_query("SELECT hypertable_size('detections');")
+
+
         rich.print(f"OBSERVATIONS size {obs_size/1e6:.02f} MB for {obs_count} lines")
         rich.print(f"timeseries   size {ts_size /1e6:.02f} MB for {ts_count} lines")
         rich.print(f"profiles     size {pr_size /1e6:.02f} MB for {pr_count} lines")
+        rich.print(f"profiles     size {dt_size / 1e6:.02f} MB for {dt_count} lines")
 
         before, after, ratio = db.timescale.compression_stats("timeseries")
         rich.print("Hypertable 'timeseries'")
@@ -90,6 +95,3 @@ if __name__ == "__main__":
         rich.print(f"    before compression: {before} MBytes")
         rich.print(f"     after compression: {after} MBytes")
         rich.print(f"     compression ratio: {ratio}")
-
-
-
