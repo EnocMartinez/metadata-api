@@ -325,7 +325,6 @@ dataset_exporter_conf = {
     "required": ["path", "host", "period", "format"]
 }
 
-
 __datasets = {
     "$id": "mmm:datasets",
     "type": "object",
@@ -350,7 +349,14 @@ __datasets = {
         "constraints": {  # Constraint the datset to certain conditions, such as depth and/or time
             "type": "object",
             "properties": {
-                "timeRange": {"type": "string"}
+                "timeRange": {"type": "string"},
+                "@processes": {"type": "string"},  # used to filter data by applied process
+                "fieldOfView": {  # Inteded to select cameras with specific resource withine their field of view
+                    "type": "object",
+                    "properties": {
+                        "@resources": {"type":  "string"}
+                    }
+                }
             }
         },
         "dataType": __data_types__,  # may be redundant, but helps parsing info
@@ -511,7 +517,8 @@ __resources = {
     "properties": {
         "name": {"type": "string"},
         "description": {"type": "string"},
-        "type": {"type": "string", "enum": __resource_type}
+        "type": {"type": "string", "enum": __resource_type},
+        "parameters": {"type": "object"}
     },
     "required": ["name", "description", "type"]
 }
