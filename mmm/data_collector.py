@@ -12,7 +12,10 @@ import logging
 
 import emso_metadata_harmonizer.metadata
 import jsonschema
+import numpy as np
 import pandas as pd
+from torch.fx.experimental.unification import variables
+
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
 from .common import run_subprocess, check_url, detect_common_path, run_over_ssh, LoggerSuperclass, assert_types, \
@@ -77,21 +80,129 @@ class DataCollector(LoggerSuperclass):
         dataset_id = dataset["#id"]
         os.makedirs(tmp_folder, exist_ok=True)
         filename = dataset_id
-        if tstart.strftime("%Y%m%d") not in filename:
+
+        if tstart > pd.Timestamp("1900", tz="utc") and tstart.strftime("%Y%m%d") not in filename:
             filename +=  "_" + tstart.strftime("%Y%m%d") + "_" + tend.strftime("%Y%m%d")
         filename += extensions[fmt]
         return os.path.join(tmp_folder, filename)
 
-    def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str,
-                         time_end: pd.Timestamp|str, fmt: str = "") -> list:
+    def get_dataset_type(self, dataset) -> (str, bool|None, str):
         """
-        Generate a dataset.
-        :return: list of datasets
+        From the information of a dataset determines the dataType of the dataset, the fullData flag and the period.
+        If fullData is defined it will be returned, if it's not defined a None value will be returned.
+        If there's an average period will be returned in third place
+        :return: (dataType, fullData, period)
+        """
+        assert_type(dataset, dict)
+        data_type = dataset["dataType"]
+        try:
+            full_data = dataset["dataSourceOptions"]["fullData"]
+        except KeyError as e:
+            full_data = None
+        try:
+            period = dataset["dataSourceOptions"]["averagePeriod"]
+        except KeyError:
+            period = ""
+
+        # make some checks
+
+        if data_type in ["timeseries", "profiles"] and not full_data and not period:
+            self.error(f"Error in dataset '{dataset['#id']}' timeseries or profiles dataset must be or fullData=True "
+                       f"OR fullData=False and averagePeriod=<period>", exception=ValueError)
+
+        return data_type, full_data, period
+
+    def get_dataset_datastream_ids(self, dataset) -> list:
+        """
+        Return a list of datastream_ids that are relevant to a specific dataset
+        :param dataset:  dataset configuration
+        :return: list of IDs
+        """
+        assert_type(dataset, dict)
+        data_type, full_data, average_period = self.get_dataset_type(dataset)
+
+        sensors = dataset["@sensors"]
+        station = dataset["@stations"]
+        # Extract list of variables
+        variables = []
+        if "@variables" in dataset.keys():
+            variables = dataset["@variables"]
+
+        self.debug(f"Getting datastreams for station={station} sensors={sensors} and variables={variables}")
+        # Construct the query
+        sensors_str = ",".join([f"'{s}'" for s in sensors])
+        q = f"""
+        select "ID" from "DATASTREAMS" where
+            "SENSOR_ID" in (select "ID" from "SENSORS" where "NAME" in ({sensors_str}))
+            and "THING_ID" = (select "ID" from "THINGS" where "NAME" = '{station}')
+            and "PROPERTIES"->>'dataType' = '{data_type}'
+        """
+
+        if type(full_data) != type(None):
+            q += f"and \"PROPERTIES\"->>'fullData' = '{str(full_data).lower()}' \n"
+
+        if average_period:
+            q += f"and \"PROPERTIES\"->>'averagePeriod' = '{average_period}' \n"
+
+        if variables:
+            variables_str = ",".join([f"'{v}'" for v in variables])  # convert to 'VAR1', 'VAR2'...
+            q += f'and "OBS_PROPERTY_ID" in (select "ID" from "OBS_PROPERTIES" where "NAME" in ({variables_str}))'
+
+        q += ";"
+        return self.sta.list_from_query(q, debug=True)
+
+    def get_dataset_time_coverage(self, dataset: dict) -> (pd.Timestamp, pd.Timestamp):
+        """
+        Looks for the first timestamp where there is data from a dataset
+        :param dataset: dataset configuration
+        :return:
+        """
+        assert_type(dataset, dict)
+        # Step 1: Get the list of datastreams that will be used in this dataset
+        datastream_ids = self.get_dataset_datastream_ids(dataset)
+        self.debug(f"dataset {dataset['#id']} uses the following datastream_ids = {datastream_ids}")
+        data_type, full_data, avg_period = self.get_dataset_type(dataset)
+
+        # If timeseries with no average
+        if data_type in ["timeseries", "profiles", "detections"] and not avg_period:
+            # Get the data directly from the hypertable. Use data_type as table name
+            datastream_ids_str = ",".join([str(d) for d in datastream_ids])
+            q = f"""
+                select timestamp from {data_type} where datastream_id in ({datastream_ids_str})
+                order by timestamp asc limit 1;
+                """
+            time_start = self.sta.value_from_query(q)
+            time_end = self.sta.value_from_query(q.replace(" asc ", " desc "))
+        else:
+            # Get the data directly from the OBSERVATIONS table
+            datastream_ids_str = ",".join([str(d) for d in datastream_ids])
+            # Get the data directly from the table. Use data_type as table name
+            q = f"""
+                select "PHENOMENON_TIME_START" from "OBSERVATIONS" where "DATASTREAM_ID" in ({datastream_ids_str})
+                    order by "PHENOMENON_TIME_START" asc
+                    limit 1;
+                """
+            time_start = self.sta.value_from_query(q)
+            time_end = self.sta.value_from_query(q.replace(" asc ", " desc "))
+        self.debug(f"First timestamp: {time_start}")
+        self.debug(f"Last timestamp: {time_end}")
+        return pd.Timestamp(time_start), pd.Timestamp(time_end)
+
+    def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str = None,
+                         time_end: pd.Timestamp|str = None, fmt: str = "") -> list:
+        """
+
+        :param dataset: dataset identifier (as stored in metadata database
+        :param service_name: name of the service where it will be exported
+        :param time_start: first timestamp of the dataset
+        :param time_end: last timestamp of the dataset
+        :param fmt: overrisde configured format (e.g. create a CSV instead of a netcdf)
+        :return:
         """
         assert_type(service_name, str)
         assert_types(dataset, [dict, str])
-        assert_types(time_start, [pd.Timestamp, str])
-        assert_types(time_end, [pd.Timestamp, str])
+        assert_types(time_start, [pd.Timestamp, str, type(None)])
+        assert_types(time_end, [pd.Timestamp, str, type(None)])
 
         if type(dataset) is str:
             conf = self.mc.get_document("datasets", dataset)
@@ -104,14 +215,16 @@ class DataCollector(LoggerSuperclass):
                 trange = conf["constraints"]["timeRange"]
                 time_start, time_end = trange.split("/")
             except KeyError:
-                raise ValueError("Time range not supplied and could not be found in datasets contraints")
+                self.warning("Time range not defined! Look for first and last measures")
+                rich.print(conf)
+                time_start, time_end = self.get_dataset_time_coverage(conf)
 
         if type(time_start) is str:
             time_start = pd.Timestamp(time_start)
         if type(time_end) is str:
             time_end = pd.Timestamp(time_end)
 
-        if time_start > time_end:
+        if time_start and time_end and time_start > time_end:
             raise ValueError(f"Time start={time_start} greater than time end={time_end}")
 
         # Check if we need to create a single file or a tree of smaller files:
@@ -119,14 +232,14 @@ class DataCollector(LoggerSuperclass):
             d = self.generate_dataset_file(conf, service_name, time_start, time_end, fmt=fmt)
             return [d]
         else:
-            return self.generate_dataset_tree(conf, service_name, time_start, time_end, fmt=fmt)
+            return self.generate_dataset_tree(conf, service_name, time_start=time_start, time_end=time_end, fmt=fmt)
 
-    def generate_dataset_tree(self,  dataset: dict, service_name: str, time_start: pd.Timestamp, time_end: pd.Timestamp,
-                              fmt: str = ""):
+    def generate_dataset_tree(self,  dataset: dict, service_name: str, time_start: pd.Timestamp = None,
+                              time_end: pd.Timestamp = None, fmt: str = ""):
         assert_type(service_name, str)
         assert_types(dataset, [dict, str])
-        assert_type(time_start, pd.Timestamp)
-        assert_type(time_end, pd.Timestamp)
+        assert_types(time_start, [pd.Timestamp, type(None)])
+        assert_types(time_end, [pd.Timestamp, type(None)])
         conf = dataset
 
         if service_name not in conf["export"].keys():
@@ -145,6 +258,10 @@ class DataCollector(LoggerSuperclass):
             if ctime_end < time_end:
                 time_end = ctime_end
                 rich.print(f"[yellow]WARNING: Dataset constraint Forces end time to {ctime_end}")
+
+        else:
+            # get the minimum and maximum time in the data
+            time_start, time_end = self.get_dataset_time_coverage(dataset)
 
         # Get the period
         intervals = calculate_time_intervals(time_start, time_end, service["period"])
@@ -224,95 +341,73 @@ class DataCollector(LoggerSuperclass):
     def dataframe_from_sta_detections(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
                                       time_end: pd.Timestamp):
         """
-        Returns a DataFrame for a specific Sensor in a specific time interval
+        Return all the detections from a sensor
         """
-
-        data_type = conf["dataType"]
         sensor_name = sensor["#id"]
         station_name = station["#id"]
+
+        model_name = ""
+        self.info(f"Getting detections with sensor={sensor_name} thing={station_name} from {time_start} to {time_end}")
+        try:
+            model_name = conf["constraints"]["@processes"]
+            self.info(f"Using data from AI process {model_name}")
+        except KeyError:
+           self.error("AI process not defined in 'detections' dataset!", exception=True)
+
 
         variables = []  # by default all variables will be used
         if "@variables" in conf.keys():
             variables = conf["@variables"]
 
-        # Get the THING_ID from SensorThings based on the Station name
-        thing_id = self.sta.value_from_query(
-            f'select "ID" from "THINGS" where "NAME" = \'{station_name}\';'
-        )
-        sensor_id = self.sta.value_from_query(
-            f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';'
-        )
-
-        # select * from "DATASTREAMS"
-        # 	where "SENSOR_ID" = (select "ID" from "SENSORS" where "NAME" = 'IPC608_8B64_165')
-        # 	and "PROPERTIES"->>'modelName' = 'YOLOv8l_18sp_2361img'
-        # 	and "PROPERTIES"->>'dataType' = 'detections'
-        # 	and "PROPERTIES"->>'standardName' = 'Coris julis'
-        # ;
-
-        # Super query that returns all varname and datastream_id  for one station-sensor combination
-        # Results are stored as a DataFrame
-        query = f'''select 
-                "OBS_PROPERTIES"."NAME" as varname, 
-                "DATASTREAMS"."ID" as datastream_id                    
-            from  
-                "DATASTREAMS"
+        self.debug(f"getting datastream_id where dataType=json and sensor={sensor_name} and station={station_name}")
+        # First get all the times where we have inferences. Let's assume that we only have one datastream that
+        # matches data_type=json and model_name=<AI model>
+        q = f""" select \"ID\" from \"DATASTREAMS\" 
             where 
-                "DATASTREAMS"."SENSOR_ID" = {sensor_id} and "DATASTREAMS"."THING_ID" = {thing_id} 
-                and "DATASTREAMS"."PROPERTIES"->>'dataType' = '{data_type}'
-                and ("DATASTREAMS"."PROPERTIES"->>'fullData')::boolean = {full_data}                    
-            '''
+                \"SENSOR_ID\" = (select \"ID\" from \"SENSORS\" where \"NAME\" = '{sensor_name}')
+                and \"THING_ID\" = (select \"ID\" from \"THINGS\" where \"NAME\" = '{station_name}')
+                and \"PROPERTIES\"->>'dataType' = 'json'
+            	and \"PROPERTIES\"->>'modelName' = '{model_name}'
+            ;"""
+        inference_datastream = self.sta.value_from_query(q)
+        self.debug(f"Pictures datastream_id = {inference_datastream}")
+        df_inf = self.sta.dataframe_from_query(f'''
+            select
+                "PHENOMENON_TIME_START" as timestamp,
+                "PARAMETERS"->>'processedImage' as picture
+            from "OBSERVATIONS"
+            where 
+                "DATASTREAM_ID" = {inference_datastream} and
+                "PHENOMENON_TIME_START" between '{time_start}' and '{time_end}'
+            ;
+            ''')
+        df_inf = df_inf.set_index("timestamp")
+        taxa_dict = self.sta.dict_from_query(
+            f"""
+            select \"PROPERTIES\"->>'standardName' as taxa, \"ID\"  from \"DATASTREAMS\"
+                where	
+                \"SENSOR_ID\" = (select \"ID\" from \"SENSORS\" where \"NAME\" = '{sensor_name}')
+                and \"THING_ID\" = (select \"ID\" from \"THINGS\" where \"NAME\" = '{station_name}')
+                and \"PROPERTIES\"->>'dataType' = 'detections'
+                and \"PROPERTIES\"->>'modelName' = '{model_name}'
+         """)
 
-        if not full_data:
-            # if we are dealing with an average, we need to make sure that the average period matches
-            avg_period = conf["dataSourceOptions"]["averagePeriod"]
-            query += f'\r\n\t\t and "DATASTREAMS"."PROPERTIES"->>\'averagePeriod\' = \'{avg_period}\''
-
-        query += ";"
-        datastreams = self.sta.dataframe_from_query(query)
-        sensor_dataframes = []
-        for idx, ds in datastreams.iterrows():
-            # ds is a dict with 'varname', 'datastream_id' and 'data_type'
-            datastream_id = ds["datastream_id"]
-            varname = ds["varname"]
-            if variables and varname not in variables:
-                rich.print(f"[yellow]Ignoring variable {varname}")
-                continue
-
-            # Query all data from the datastream_id during the time range and assign proper variable name
-            if full_data:
-                q = (
-                    f'''
-                    select timestamp, value as "{varname}", qc_flag as "{varname + "_QC"}" 
-                    from timeseries 
-                    where datastream_id = {datastream_id}
-                    and timestamp between \'{time_start}\' and \'{time_end}\';                     
-                    '''
-                )
+        for taxa, datastream_id in taxa_dict.items():
+            self.debug(f"Getting taxa='{taxa}' with ID={datastream_id}")
+            df = self.sta.dataframe_from_query(f'''
+                select timestamp, value as "{taxa}" from detections
+                where datastream_id = {datastream_id} and timestamp between '{time_start}' and '{time_end}';
+            ''').set_index("timestamp")
+            if df.empty:
+                df_inf[taxa] = 0
             else:
-                # Query the regular OBSERVATIONS table
-                q = (f'''
-                    select
-                        "PHENOMENON_TIME_START" as timestamp,
-                        "RESULT_NUMBER" as "{varname}",
-                        "RESULT_QUALITY"->>'qc_flag' as "{varname + "_QC"}",
-                        "RESULT_QUALITY"->>'stdev' as "{varname + "_STD"}"
-                    from
-                        "OBSERVATIONS"
-                    where
-                        "DATASTREAM_ID" = {datastream_id}
-                        and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
-                ''')
-            df = self.sta.dataframe_from_query(q, debug=False)
-            sensor_dataframes.append(df)
-        df = merge_dataframes_by_columns(sensor_dataframes)
-        df = df.rename(columns={"timestamp": "TIME"})
-        df = df.set_index("TIME")
-        df = df.sort_index(ascending=True)
-        return df
+                df_inf = df_inf.join(df, "timestamp", "left")
 
-    def dataframe_from_sta_timeseries(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp,
-                                      time_end: pd.Timestamp):
+            df_inf[taxa] = df_inf[taxa].replace(np.nan, 0).astype(int)
+        return df_inf
+
+    def dataframe_from_sta_timeseries(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
+                                      time_end: pd.Timestamp = None):
         """
         Returns a DataFrame for a specific Sensor in a specific time interval
         """
@@ -354,6 +449,7 @@ class DataCollector(LoggerSuperclass):
                 and "DATASTREAMS"."PROPERTIES"->>'dataType' = '{data_type}'
                 and ("DATASTREAMS"."PROPERTIES"->>'fullData')::boolean = {full_data}                    
             '''
+
         if not full_data:
             # if we are dealing with an average, we need to make sure that the average period matches
             avg_period = conf["dataSourceOptions"]["averagePeriod"]
@@ -402,13 +498,12 @@ class DataCollector(LoggerSuperclass):
         df = df.sort_index(ascending=True)
         return df
 
-    def netcdf_from_sta(self, conf, time_start: pd.Timestamp, time_end: pd.Timestamp):
+    def netcdf_from_sta(self, conf, time_start: pd.Timestamp = None, time_end: pd.Timestamp = None):
         """
         Creates a NetCDF file according to the configuration
         :param conf:
-        :param time_start: time start
-        :param time_end: time end
-        :param station: to minimize query time, let the option to pass the station
+        :param time_start: time start to filter the data
+        :param time_end: time start
         :return: generated NetCDF filename
         """
         self.debug("Creating NetCDF dataset")
@@ -422,16 +517,19 @@ class DataCollector(LoggerSuperclass):
 
         for sensor_name in conf["@sensors"]:
             self.info(f"Getting {sensor_name} data from {time_start} to {time_end}")
-
             sensor = self.mc.get_document("sensors", sensor_name)
-            df = self.dataframe_from_sta(conf, station, sensor, time_start, time_end)
-
+            df = self.dataframe_from_sta(conf, station, sensor, time_start=time_start, time_end=time_end)
+            if df.empty:
+                tstart = None
+                tend = None
+            else:
+                # now select real values of time start and time end
+                tstart = pd.Timestamp(df.index.values[0])
+                tend = pd.Timestamp(df.index.values[-1])
             dataframes.append(df)
             # Get the real time start/time end
-            m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=time_start, tend=time_end)
+            m = self.metadata_harmonizer_conf(conf, sensor, station, variables, tstart=tstart, tend=tend)
             metadata.append(m)
-
-
 
         if all([df.empty for df in dataframes]):
             self.warning(f"ALL dataframes from {time_start} to {time_end} are empty!, skpping")
@@ -569,7 +667,7 @@ class DataCollector(LoggerSuperclass):
 
     def metadata_harmonizer_conf(self, dataset, sensor: dict, station: dict, variable_ids: list,
                                  default_data_mode="real-time", os_data_type="OceanSITES time-series data",
-                                 tstart: str = "", tend: str = "") -> dict:
+                                 tstart: pd.Timestamp = None, tend: pd.Timestamp = None) -> dict:
         """
         This method returns the configuration required by the Metadata Harmonizer tool from the Metadata DB
         :param dataset: sensor dict from Metadata DB database
@@ -580,6 +678,11 @@ class DataCollector(LoggerSuperclass):
         :param os_data_type: OceanSITES data type, probably by default time-series data
         :return:
         """
+        if tstart:
+            assert_type(tstart, pd.Timestamp)
+        if tend:
+            assert_type(tend, pd.Timestamp)
+
 
         if not variable_ids:  # By default, use ALL variables
             variable_ids = [dic["@variables"] for dic in sensor["variables"]]

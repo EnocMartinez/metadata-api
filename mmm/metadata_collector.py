@@ -16,7 +16,7 @@ import datetime
 import json
 import pandas as pd
 import os
-from mmm.common import YEL, RST, load_fields_from_dict, validate_schema, PRL, setup_log
+from mmm.common import YEL, RST, load_fields_from_dict, validate_schema, PRL, setup_log, assert_type
 from mmm.common import LoggerSuperclass
 import psycopg2
 from psycopg2 import sql
@@ -798,6 +798,7 @@ class MetadataCollector(LoggerSuperclass):
         Returns (latitude, longitude, depth) for a station at a particular time. It looks for all deployments of a
         station and selects the one immediately before the selected time.
         """
+        assert_type(timestamp, pd.Timestamp)
         self.debug(f"Getting activities with applied to {station_name}")
         sql_filter = f" where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@stations' = '{station_name}'"
         hist = self.get_documents("activities", sql_filter)
