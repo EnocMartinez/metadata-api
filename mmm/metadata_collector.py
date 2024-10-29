@@ -16,7 +16,7 @@ import datetime
 import json
 import pandas as pd
 import os
-from mmm.common import YEL, RST, load_fields_from_dict, validate_schema, PRL, setup_log, assert_type
+from mmm.common import YEL, RST, load_fields_from_dict, validate_schema, PRL, setup_log, assert_type, assert_types
 from mmm.common import LoggerSuperclass
 import psycopg2
 from psycopg2 import sql
@@ -793,12 +793,13 @@ class MetadataCollector(LoggerSuperclass):
         else:
             self.info(f"  =) =) Congratulations! You have a healthy database (= (=\n")
 
-    def get_station_position(self, station_name: str, timestamp: pd.Timestamp) -> (float, float, float):
+    def get_station_position(self, station_name: str, timestamp: pd.Timestamp = None) -> (float, float, float):
         """
         Returns (latitude, longitude, depth) for a station at a particular time. It looks for all deployments of a
-        station and selects the one immediately before the selected time.
+        station and selects the one immediately before the selected time. If timestamp is null return the last
+        deployment
         """
-        assert_type(timestamp, pd.Timestamp)
+        assert_types(timestamp, [pd.Timestamp, type(None)])
         self.debug(f"Getting activities with applied to {station_name}")
         sql_filter = f" where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@stations' = '{station_name}'"
         hist = self.get_documents("activities", sql_filter)
@@ -815,7 +816,7 @@ class MetadataCollector(LoggerSuperclass):
             data["longitude"].append(dep["where"]["position"]["longitude"])
             data["depth"].append(dep["where"]["position"]["depth"])
 
-        self.debug(f"Creating dataframe with deployemnts")
+        self.debug(f"Creating dataframe with deployments")
         df = pd.DataFrame(data)
         df["time"] = pd.to_datetime(df["time"], utc=True)
         df = df.set_index("time")
@@ -824,8 +825,11 @@ class MetadataCollector(LoggerSuperclass):
 
         self.debug(f"Loking for deployment previous to {timestamp}")
 
+        if type(timestamp) == type(None):
+            # If timestamp not specified return the last deployment
+            return df["latitude"].values[0], df["longitude"].values[0], df["depth"].values[0]
+
         if timestamp.tz is None:
-            self.warning(f"Timestamp {timestamp} without timezone! forcing UTC")
             timestamp = timestamp.tz_localize("UTC")
 
         # Force 00:00:00

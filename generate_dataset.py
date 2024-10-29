@@ -38,7 +38,7 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
     with open(secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
 
-    log = setup_log("sta_to_emso")
+    log = setup_log("sta_to_emso", log_level="info")
     if verbose:
         log.setLevel(logging.DEBUG)
 
