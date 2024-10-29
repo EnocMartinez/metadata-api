@@ -144,14 +144,14 @@ def __people_with_roles__(roles: list):
         }
     }
 
-
 __activity_type__ = [
-    "deployment",  # Deployment of a instrument, platform or resource
-    "recovery",  # recovery a previously deployed asset
+    "deployment",   # Deployment of a instrument, platform or resource
+    "recovery",     # recovery a previously deployed asset
     "maintenance",  # operation to ensure the proper functionality of an asset, such as replacing broken parts
     "inspection",   # operation to inspect the status of an asset
     "calibration",
-    "test",  # activity to test the proper functionality of a sensor/platform/resource
+    "test",         # activity to test the proper functionality of a sensor/platform/resource
+    "failure",
     "other"
 ]
 
@@ -171,7 +171,6 @@ __project_types__ = [
 __partnership_types__ = ["coordinator", "participant", "thirdParty", "other", "associatedPartner"]
 
 # -----------------------------#
-
 __people = {
     "$id": "mmm:people",
     "type": "object",
