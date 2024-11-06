@@ -152,6 +152,7 @@ __activity_type__ = [
     "calibration",
     "test",         # activity to test the proper functionality of a sensor/platform/resource
     "failure",
+    "loss",         # equipment is lost
     "other"
 ]
 
@@ -249,10 +250,11 @@ __sensors = {
                 },
                 "required": ["parameters", "@processes"]
             }
-        }
+        },
+        "dataMode": {"type": "string", "enum": ["real-time", "delayed"]},
     },
     "required": ["description", "shortName", "longName", "serialNumber", "instrumentType", "model", "manufacturer",
-                 "processes"]
+                 "processes", "dataMode"]
 }
 
 

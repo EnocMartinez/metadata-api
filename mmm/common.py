@@ -31,8 +31,6 @@ CYN = "\x1B[36m"
 WHT = "\x1B[37m"
 NRM = "\x1B[0m"
 PRL = "\033[95m"
-RST = "\033[0m"
-
 
 colors = [GRN, RST, BLU, YEL, RED, MAG, CYN, WHT, NRM, PRL, RST]
 
@@ -429,7 +427,9 @@ def assert_dict(conf: dict, required_keys: dict, verbose=False):
             raise AssertionError(msg)
 
 
-def validate_schema(doc: dict, schema: dict, errors: list, verbose=False) -> list:
+def validate_schema(doc: dict, schema: dict, errors=[], verbose=False) -> list:
+    error_list = errors
+    errors = []
     if "$id" not in schema.keys():
         raise ValueError("Schema not valid!! missing $id field")
 
@@ -457,8 +457,8 @@ def validate_schema(doc: dict, schema: dict, errors: list, verbose=False) -> lis
     if verbose and errors:
         for e in errors:
             rich.print(e)
-
-    return errors
+    error_list = error_list + errors
+    return error_list
 
 
 def retrieve_url(url, output="", attempts=3, timeout=5):

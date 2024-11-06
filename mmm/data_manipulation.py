@@ -12,7 +12,7 @@ created: 1/12/23
 import pandas as pd
 import rich
 from rich.progress import Progress
-from mmm.common import qc_flags
+from mmm.common import qc_flags, assert_type
 import numpy as np
 import time
 import gc
@@ -476,57 +476,6 @@ def calculate_angle_mean(df, angle, units="degrees"):
     del df[angle + "_cos"]
     return df
 
-
-def purge_dataframe(df, deployment_history: list):
-    """
-    Takes the deployment history of a sensor and drops all observations outside the deployment periods
-    :param df: dataframe
-    :param deployment_history: list of dicts with the info of each deployment
-    :return: purged dataset
-    """
-
-    print("Erasing data acquired outside deployment periods")
-    __deployed_status = ["now", ""]  # keywords to detect that a instrument is already deployed (empty end time or "")
-    purge_start = ["1980-01-01T00:00:00"]  # purge all measurements before a deployment
-    purge_end = []
-
-    for deployment in deployment_history:
-        deployment_start = deployment["timePeriod"][0]
-        deployment_end = deployment["timePeriod"][1]
-
-        # erase timezone (if any)
-        deployment_start = deployment_start.replace("Z", "").replace("z", "")
-        deployment_end = deployment_end.replace("Z", "").replace("z", "")
-
-        purge_start.append(deployment_end)
-        purge_end.append(deployment_start)
-
-    # if the sensor us currenty deployed
-    if purge_start[-1] in __deployed_status:
-        # ignore the last timeperiod
-        purge_start = purge_start[:-1]
-    else:
-        # if it is not deployed, purge until now
-        now = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")  # string with current time
-        purge_end.append(now)
-
-    with Progress() as progress:
-        task = progress.add_task("[cyan]Purging dataframes...", total=len(purge_start))
-        for i in range(0, len(purge_start)):
-            start = purge_start[i]
-            end = purge_end[i]
-            start_datetime = pd.to_datetime(start)
-            end_datetime = pd.to_datetime(end)
-            if end_datetime < df.index.values[0] or start_datetime > df.index.values[-1]:
-                rich.print("    [blue]Ignoring interval %s and %s..." % (start, end))
-                pass  # period outside dataset, skip it
-            else:
-                rich.print("    [cyan]Drop data between %s and %s..." % (start, end))
-                df = df.drop(df[start:end].index)
-            progress.update(task, advance=1)
-    return df
-
-
 def drop_duplicated_indexes(df, store_dup="", keep="first"):
     """
     Drops duplicated data points. If an index
@@ -693,10 +642,11 @@ def ceil_year(t):
 def ceil_timestamp(t: pd.Timestamp, period: str) -> pd.Timestamp:
     """
     Ceils a timestamp, handling day, month and year periods
+    :param t: timestamp
     :param period: period to split, can be 'daily', 'monthly' or 'yearly'
     :param period: period to split, can be 'daily', 'monthly' or 'yearly'
     """
-
+    assert_type(t, pd.Timestamp)
     if period == "daily":
         t = t + pd.Timedelta("1D")
         t = t.floor("1D")
@@ -715,7 +665,9 @@ def calculate_time_intervals(start_time: pd.Timestamp, end_time: pd.Timestamp, p
     month, day. As example period 2023-06-01T03:12:00Z/'2023-06-03T12:00:00Z separated daily will be:
         [(2023-06-01T03:12:00Z, 2023-06-02T00:00:00Z),
         (2023-06-02T00:00:00Z, 2023-06-03T00:00:00Z),
-        (2023-06-03T00:00:00Z, 2023-06-03T12:00:00Z)]
+        (2023-06-03T00:00:00Z, 2023-06-04T00:00:00Z)]
+
+    Note that last timestamp will also be ceiled, this is to allow a process to overwrite the same dataset with new data
 
     :param start_time: start of the interval
     :param end_time: end of the interval
@@ -729,12 +681,10 @@ def calculate_time_intervals(start_time: pd.Timestamp, end_time: pd.Timestamp, p
     intervals = []
     partial_time_start = ceil_timestamp(start_time, period)
     if partial_time_start != start_time:
-        print(f"adding {start_time} to {partial_time_start}")
         intervals.append([start_time, partial_time_start])
 
     while partial_time_start < end_time:
         partial_end_time = ceil_timestamp(partial_time_start, period)
-        partial_end_time = min(partial_end_time, end_time)
         intervals.append((partial_time_start, partial_end_time))
         partial_time_start = partial_end_time
 

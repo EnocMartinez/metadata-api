@@ -800,7 +800,7 @@ class MetadataCollector(LoggerSuperclass):
         deployment
         """
         assert_types(timestamp, [pd.Timestamp, type(None)])
-        self.debug(f"Getting activities with applied to {station_name}")
+        self.debug(f"Getting activities applied to {station_name}")
         sql_filter = f" where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@stations' = '{station_name}'"
         hist = self.get_documents("activities", sql_filter)
         self.debug(f"Got {len(hist)} activities")
@@ -851,6 +851,55 @@ class MetadataCollector(LoggerSuperclass):
             docs = self.get_documents(col)
             for doc in docs:
                 self.delete_document(col, doc["#id"], history=True)
+
+    def get_last_sensor_deployment(self, sensor_id) -> (str, pd.Timestamp, bool):
+        """
+        Returns the name of the last station where this sensor was deployed
+        :return: station_id and timestamp
+        """
+        assert_type(sensor_id, str)
+        doc = self.db.value_from_query(
+            f"""
+            select doc from activities 
+            where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@sensors' = '{sensor_id}'
+            order by (doc->>'time')::timestamp desc
+            limit 1
+            """
+        )
+        deployment_t = pd.Timestamp(doc["time"])
+
+        try:
+            recovery_t = self.get_last_sensor_recovery(sensor_id)
+        except LookupError:
+            # No recovery for this sensor
+            active = True
+            return doc["where"]["@stations"], deployment_t, active
+
+        if deployment_t > recovery_t:
+            active = True
+        else:
+            active = False
+        return doc["where"]["@stations"], deployment_t, active
+
+
+    def get_last_sensor_recovery(self, sensor_id) -> (pd.Timestamp):
+        """
+        Returns the timestamp of the last recovery (or loss)
+        :param sensor_id:
+        :return:
+        """
+        assert_type(sensor_id, str)
+        doc = self.db.value_from_query(
+            f"""
+            select doc from activities 
+            where doc->>'type' in ('recovery', 'loss') and doc->'appliedTo'->>'@sensors' = '{sensor_id}'
+            order by (doc->>'time')::timestamp desc
+            limit 1
+            """, debug=False
+        )
+        return pd.Timestamp(doc["time"])
+
+
 
 
 def get_station_deployments(mc: MetadataCollector, station: dict) -> list:
@@ -949,6 +998,7 @@ def get_station_coordinates(mc: MetadataCollector, station: any) -> (float, floa
         break
 
     return latitude, longitude, depth
+
 
 
 def get_station_history(mc: MetadataCollector, name: str) -> list:
