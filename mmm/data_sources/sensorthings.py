@@ -212,19 +212,6 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
 
         return {key: value for key, value in response}
 
-    def value_from_query(self, query, debug=False):
-        """
-        Run a single value from a query
-        """
-        response = self.exec_query(query, debug=debug, fetch=True)
-        if len(response) != 1:
-            rich.print(f"[purple]{query}")
-            raise LookupError(f"Expected only one column, got {len(response)}")
-        elif len(response[0]) != 1:
-            rich.print(f"[purple]{query}")
-            raise LookupError(f"Expected one value, got {len(response)}")
-        return response[0][0]
-
     def inject_to_timeseries(self, df, datastreams, max_rows=100000, disable_triggers=False,
                              tmp_folder="/tmp/sta_db_copy/data", tmp_folder_db="/tmp/sta_db_copy/data"):
         """

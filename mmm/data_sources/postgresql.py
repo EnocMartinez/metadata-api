@@ -14,11 +14,12 @@ import psycopg2
 import time
 import pandas as pd
 import traceback
+import rich
 
 
 class Connection(LoggerSuperclass):
     def __init__(self, host, port, db_name, db_user, db_password, timeout, logger, count, autocommit=False):
-        LoggerSuperclass.__init__(self, logger, f"PGCON{count}", colour=PRL)
+        LoggerSuperclass.__init__(self, logger, f"PGCON{count}-{db_name}", colour=PRL)
         self.info("Creating connection")
         self.__host = host
         self.__port = port
@@ -130,7 +131,7 @@ class PgDatabaseConnector(LoggerSuperclass):
             time.sleep(0.5)
             self.debug("waiting for conn")
 
-        self.info(f"Creating DB connection {len(self.connections)}..")
+        self.info(f"Creating DB connection to  {self.__name}..")
         return self.new_connection()
 
     def exec_query(self, query, description=False, debug=False, fetch=True, ignore_errors=False):
@@ -169,6 +170,17 @@ class PgDatabaseConnector(LoggerSuperclass):
             self.error(f"Removing connection")
             self.connections.remove(c)
         return results
+
+    def value_from_query(self, query, debug=False):
+        """
+        Run a single value from a query
+        """
+        response = self.exec_query(query, debug=debug, fetch=True)
+        if len(response) != 1:
+            raise LookupError(f"Expected only one column, got {len(response)}")
+        elif len(response[0]) != 1:
+            raise LookupError(f"Expected one value, got {len(response)}")
+        return response[0][0]
 
     def list_from_query(self, query, debug=False):
         """

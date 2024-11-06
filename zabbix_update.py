@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
 """
+This script automatically registers all data from the MMAPI and SensorThings database into a Zabbix server. All stations
+are registered as host groups and real-time sensors are registered as hosts. Real-time sensors are those whose dataMode
+prperty is "real-time":
+
+    {   ...
+        "dataMode": "real-time"
+    }
+
+Latest data from real-time sensors is also sent to zabbix according to period. To avoid duplicated data, times are
+floored to prevent duplicated data. So, if period="30min" and the script is executed at 11:04, ALL data from 10:30 to
+11:00 will be sent. If the period="1h" and the script is executed at 11:57 all data from 10:00 to 11:00 will be sent.
 
 author: Enoc Martínez
 institution: Universitat Politècnica de Catalunya (UPC)
@@ -12,7 +23,7 @@ import pandas as pd
 import yaml
 from mmm import setup_log, SensorThingsApiDB
 from mmm.common import LoggerSuperclass, PRL, RST, GRN, assert_type
-from mmm.metadata_collector import MetadataCollector, init_metadata_collector
+from mmm.metadata_collector import init_metadata_collector
 from zabbix_utils import ZabbixAPI, Sender, ItemValue
 import time
 import logging
@@ -21,14 +32,13 @@ import logging
 def gen_zbx_key(sensor_id, varname, data_type, average=""):
     """
     Generates a zabbix item key based on the input info
-    :param sensor_name:
+    :param sensor_id:
     :param varname:
     :param data_type:
     :param average:
     :return: key value. If a key could not been generated, just
     """
     key = f"{sensor_id}.{varname}.{data_type}"
-
     if data_type in ["timeseries", "profiles"]:
         # only profiles and timeseries can be averaged
         if not average:
