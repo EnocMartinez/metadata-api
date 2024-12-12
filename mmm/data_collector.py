@@ -30,6 +30,29 @@ def init_data_collector(secrets: dict, log: logging.Logger, mc: MetadataCollecto
                         sta: SensorThingsApiDB = None):
     return DataCollector(secrets, log, mc=mc, sta=sta)
 
+def get_current_dateset_dates(period)-> (pd.Timestamp, pd.Timestamp):
+    """
+    Gets the dates for the current dataset, e.g. if monthly and now is 2024-12-12 start=2024-12-01 end=2025-01-01
+    :param period:
+    :return:  time_start, time_end
+    """
+    assert_type(period, str)
+    # Convert from plain-text to pandas-like time period
+    now = pd.Timestamp.utcnow()
+    if period == "daily":
+        time_start = now.floor("1D")
+        time_end = time_start + pd.to_timedelta("1D")
+    elif period == "monthly":
+        time_start = now.floor("1D") + pd.offsets.MonthBegin(-1)
+        time_end = time_start + pd.offsets.MonthBegin(1)
+
+    elif period == "yearly":
+        time_start = now.floor("1D") + pd.offsets.YearBegin(-1)
+        time_end = time_start + pd.offsets.YearBegin(1)
+    else:
+        raise ValueError(f"Period not valied: '{period}'")
+    return time_start, time_end
+
 
 class DataCollector(LoggerSuperclass):
     """
@@ -182,7 +205,7 @@ class DataCollector(LoggerSuperclass):
         return pd.Timestamp(time_start), pd.Timestamp(time_end)
 
     def generate_dataset(self, dataset: str | dict, service_name: str, time_start: pd.Timestamp|str = None,
-                         time_end: pd.Timestamp|str = None, fmt: str = "") -> list:
+                         time_end: pd.Timestamp|str = None, fmt: str = "", current=False) -> list:
         """
 
         :param dataset: dataset identifier (as stored in metadata database
@@ -201,6 +224,18 @@ class DataCollector(LoggerSuperclass):
             conf = self.mc.get_document("datasets", dataset)
         else:
             conf = dataset
+        dataset_id = conf["#id"]
+        self.info(f"Creating dataset {dataset_id} from {time_start} to {time_end}")
+
+        # Force the start and end in the current period, e.g. if "monthly" and now is 2024-12-12 the period
+        # will be from 2024-12-01T00:00:00Z to 2025-01-01T00:00:00Z
+        if current:
+            try:
+                period = conf["export"][service_name]["period"]
+            except KeyError:
+                raise ValueError(f"Could not access period for dataset_id='{dataset_id}' service='{service_name}'")
+
+            time_start, time_end = get_current_dateset_dates(period)
 
         if not time_start and not time_end:
             # No time range supplied, trying to extract it from the dataset constraints
@@ -216,6 +251,12 @@ class DataCollector(LoggerSuperclass):
             time_start = pd.Timestamp(time_start)
         if type(time_end) is str:
             time_end = pd.Timestamp(time_end)
+
+        if not time_start.tzinfo:
+            time_start = pd.Timestamp.tz_localize(time_start, "utc")
+        if not time_end.tzinfo:
+            time_end = pd.Timestamp.tz_localize(time_end, "utc")
+
 
         if time_start and time_end and time_start > time_end:
             raise ValueError(f"Time start={time_start} greater than time end={time_end}")
@@ -253,8 +294,14 @@ class DataCollector(LoggerSuperclass):
                 self.warning(f"Dataset constraint Forces end time to {ctime_end}")
         else:
             # get the minimum and maximum time in the data
-            time_start, time_end = self.get_dataset_time_coverage(dataset)
-            self.info(f"Generating datasets from {time_start} to {time_end}")
+            coverage_start, coverage_end = self.get_dataset_time_coverage(dataset)
+
+            if coverage_start > time_start:
+                time_start = coverage_start
+            if coverage_end < time_end:
+                time_end = coverage_end
+
+        self.info(f"Generating datasets from {time_start} to {time_end}")
 
         # Get the period
         intervals = calculate_time_intervals(time_start, time_end, service["period"])

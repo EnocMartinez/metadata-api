@@ -454,6 +454,12 @@ def validate_schema(doc: dict, schema: dict, errors=[], verbose=False) -> list:
             if "where" not in doc.keys() or "position" not in doc["where"].keys():
                 errors.append(f"[red]Document='{doc['#id']}' station deployment MUST have GPS coordinates!")
 
+        # Make sure that each activity points to a single sensor/station/resource
+        keys = doc["appliedTo"].keys()
+        count = int("@stations" in keys) + int("@resources" in keys) + int("@sensors" in keys)
+        if count != 1:
+            errors.append(f"[red]Expected only ONE of @resources @station or @sensors")
+
     if verbose and errors:
         for e in errors:
             rich.print(e)

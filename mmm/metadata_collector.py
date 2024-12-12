@@ -182,9 +182,14 @@ class MetadataCollector(LoggerSuperclass):
         """
         Create database tables
         """
+
+
+        table_names = self.db.list_from_query("SELECT table_name FROM information_schema.tables")
+        table_names_hist = self.db_hist.list_from_query("SELECT table_name FROM information_schema.tables")
+
         for collection in self.collection_names:
             collection = collection.lower()  # use lowercase in SQL
-            if not self.db.check_if_table_exists(collection):
+            if collection not in table_names:
                 self.info(f"   Creating table {collection}")
                 query = f"""
                 CREATE TABLE {collection} (
@@ -200,7 +205,7 @@ class MetadataCollector(LoggerSuperclass):
 
         for collection in self.collection_names:
             collection = collection.lower()  # use lowercase in SQL
-            if not self.db_hist.check_if_table_exists(collection):
+            if collection not in table_names_hist:
                 self.info(f"Creating table {collection}")
                 query = f"""
                  CREATE TABLE {collection} (

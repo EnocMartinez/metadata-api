@@ -19,8 +19,8 @@ from mmm.metadata_collector import init_metadata_collector
 import os
 
 
-def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_end: str, out_folder: str, secrets,
-                     format:str= "", verbose=False) -> list:
+def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_end: str, secrets,
+                     current=False, format:str= "", verbose=False, erddap_config=False, log=None) -> list:
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -28,34 +28,34 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
     :param time_end:
     :param out_folder: output folder where the datasets will be generated. If null, use 'dataset_id' as folder name.
     :param secrets: secrets.yaml file
+    :param secrets: For periodic datasets generate the current file, e.g. today's file or this monthly file
     :return: list of filenames
     """
-
-    if not out_folder:
-        rich.print("using dataset_id as output folder")
-        out_folder = os.path.join("datasets", dataset_id)
 
     with open(secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
 
-    log = setup_log("sta_to_emso", log_level="info")
+    if not log:
+        log = setup_log("gen_dataset", log_level="info")
+
     if verbose:
         log.setLevel(logging.DEBUG)
 
     mc = init_metadata_collector(secrets, log=log)
     dc = DataCollector(secrets, log, mc=mc)
-    datasets = dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format)
+
+    datasets = dc.generate_dataset(dataset_id, service_name, time_start, time_end, fmt=format, current=current)
 
     if len(datasets) == 0:
-        log.error(RED + "No datasets generated!" + RST)
-        exit()
+        log.warning(RED + "No datasets generated!" + RST)
+        return []
 
     log.info(f"Generated {len(datasets)} data files")
     for dataset in datasets:
         dataset.deliver()
     dataset = datasets[-1]
 
-    if service_name == "erddap":
+    if service_name == "erddap" and erddap_config:
         log.info("Trying to autoconfigure ERDDAP dataset (using last dataset)")
         dataset.configure_erddap_remotely(
             secrets["erddap"]["datasets_xml"],
@@ -80,10 +80,11 @@ if __name__ == "__main__":
     argparser = ArgumentParser()
     argparser.add_argument("dataset_id", help="Dataset ID", nargs="?", type=str)
     argparser.add_argument("service", help="Service name (e.g. ERDDAP, CKAN, etc.)", nargs="?", type=str)
+    argparser.add_argument("--current", help="Generate the current file (e.g. current day or current month)", action="store_true")
     argparser.add_argument("--list", help="List registered datasets and exit", action="store_true")
     argparser.add_argument("-v", "--verbose", help="verbose output", action="store_true")
-    argparser.add_argument("-o", "--output", help="Folder where datasets will be stored", type=str, default="")
     argparser.add_argument("-F", "--force", help="Overwrite any existing dataset", action="store_true")
+    argparser.add_argument("-e", "--erddap", help="Configure dataset in erddap", action="store_true")
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
                            default="secrets.yaml")
     argparser.add_argument("-t", "--time-range", help="Time range with ISO notation, like 2022-01-01/2023-01-01",
@@ -94,8 +95,6 @@ if __name__ == "__main__":
 
     argparser.add_argument("-f", "--format",type=str,  required=False, default="",
                            help="Suggest format such as netcdf, csv, etc. May not work for all datasets")
-    argparser.add_argument("-e", "--reload-erddap",action="store_true", default="",
-                           help="Reload ERDDAP dataset")
 
 
     args = argparser.parse_args()
@@ -114,6 +113,7 @@ if __name__ == "__main__":
         tstart = ""
         tend = ""
 
-    generate_dataset(args.dataset_id, args.service, tstart, tend,  args.output, args.secrets, format=args.format,
-                     verbose=args.verbose)
+
+    generate_dataset(args.dataset_id, args.service, tstart, tend, args.secrets, format=args.format,
+                     current=args.current, verbose=args.verbose, erddap_config=args.erddap)
 

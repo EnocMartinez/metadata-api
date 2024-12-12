@@ -149,6 +149,7 @@ __activity_type__ = [
     "recovery",     # recovery a previously deployed asset
     "maintenance",  # operation to ensure the proper functionality of an asset, such as replacing broken parts
     "inspection",   # operation to inspect the status of an asset
+    "cleaning",     # cleans an asset
     "calibration",
     "test",         # activity to test the proper functionality of a sensor/platform/resource
     "failure",
@@ -392,7 +393,6 @@ __activities = {
     "$id": "mmm:activities",
     "type": "object",
     "properties": {
-        "name": {"type": "string"},
         "description": {"type": "string"},
         "time": {"type": "string"},
         "type": {
@@ -423,8 +423,9 @@ __activities = {
             "required": []
         },
     },
-    "required": ["name", "description", "appliedTo", "time"]
+    "required": ["description", "appliedTo", "time"]
 }
+
 
 __operations = {
     "$id": "mmm:operations",

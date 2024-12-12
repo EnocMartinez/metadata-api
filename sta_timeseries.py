@@ -40,7 +40,6 @@ import dotenv
 
 app = Flask("SensorThings TimeSeries")
 CORS(app)
-
 basic_auth = BasicAuth(app)
 
 service_root = "/sta-timeseries/v1.1"
