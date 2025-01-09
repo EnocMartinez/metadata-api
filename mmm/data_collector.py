@@ -12,7 +12,7 @@ import logging
 import emso_metadata_harmonizer.metadata
 import numpy as np
 import pandas as pd
-
+import rich
 from .data_sources import SensorThingsApiDB
 from .ckan import CkanClient
 from .common import run_subprocess, check_url, detect_common_path, run_over_ssh, LoggerSuperclass, assert_types, \
@@ -166,7 +166,7 @@ class DataCollector(LoggerSuperclass):
             q += f'and "OBS_PROPERTY_ID" in (select "ID" from "OBS_PROPERTIES" where "NAME" in ({variables_str}))'
 
         q += ";"
-        return self.sta.list_from_query(q, debug=True)
+        return self.sta.list_from_query(q, debug=False)
 
     def get_dataset_time_coverage(self, dataset: dict) -> (pd.Timestamp, pd.Timestamp):
         """
@@ -376,6 +376,21 @@ class DataCollector(LoggerSuperclass):
             return self.dataframe_from_sta_detections(conf, station, sensor, time_start, time_end)
         elif conf["dataType"] == "profiles":
             return self.dataframe_from_sta_profiles(conf, station, sensor, time_start, time_end)
+        elif conf["dataType"] == "files":
+            return self.dataframe_from_sta_observations(conf, station, sensor, time_start, time_end)
+        elif conf["dataType"] == "mixed":
+
+            conf_copy = conf.copy()
+            conf_copy["dataType"] = "files"  # force dataType to files
+
+            files =  self.dataframe_from_sta_observations(conf_copy, station, sensor, time_start, time_end)
+
+            conf_copy = conf.copy()
+            conf_copy["dataType"] = "timeseries"  # force dataType to files
+            conf_copy["dataSourceOptions"]["fullData"] = True
+            timeseries = self.dataframe_from_sta_timeseries(conf_copy, station, sensor, time_start, time_end)
+            df = merge_dataframes_by_columns([timeseries, files])
+            return df
         else:
             self.error(f"Unimplemented data type {conf['dataType']}", exception=ValueError)
 
@@ -530,7 +545,12 @@ class DataCollector(LoggerSuperclass):
                         and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
                 ''')
             df = self.sta.dataframe_from_query(q, debug=False)
+
+
+
             sensor_dataframes.append(df)
+        if not sensor_dataframes:
+            return pd.DataFrame()  # return empty dataframe
         df = merge_dataframes_by_columns(sensor_dataframes)
         df = df.rename(columns={"timestamp": "TIME"})
         df = df.set_index("TIME")
@@ -629,6 +649,85 @@ class DataCollector(LoggerSuperclass):
         df = df.sort_index(ascending=True)
         return df
 
+    def dataframe_from_sta_observations(self, conf: dict, station: dict, sensor: dict, time_start: pd.Timestamp = None,
+                                      time_end: pd.Timestamp = None):
+        """
+        Returns a DataFrame for a specific Sensor in a specific time interval
+        """
+
+        data_type = conf["dataType"]
+        sensor_name = sensor["#id"]
+        station_name = station["#id"]
+
+        variables = []  # by default all variables will be used
+        if "@variables" in conf.keys():
+            variables = conf["@variables"]
+
+
+        # Get the THING_ID from SensorThings based on the Station name
+        thing_id = self.sta.value_from_query(
+            f'select "ID" from "THINGS" where "NAME" = \'{station_name}\';'
+        )
+        sensor_id = self.sta.value_from_query(
+            f'select "ID" from "SENSORS" where "NAME" = \'{sensor_name}\';'
+        )
+        # Super query that returns all varname and datastream_id  for one station-sensor combination
+        # Results are stored as a DataFrame
+        query = f'''select 
+                "OBS_PROPERTIES"."NAME" as varname, 
+                "DATASTREAMS"."ID" as datastream_id                    
+            from  
+                "DATASTREAMS"
+            left join 
+                "OBS_PROPERTIES"
+            on 
+                "DATASTREAMS"."OBS_PROPERTY_ID" = "OBS_PROPERTIES"."ID"
+            where                
+                "DATASTREAMS"."SENSOR_ID" = {sensor_id} and "DATASTREAMS"."THING_ID" = {thing_id}                                    
+            '''
+
+        query += ";"
+        datastreams = self.sta.dataframe_from_query(query)
+        sensor_dataframes = []
+        for idx, ds in datastreams.iterrows():
+            # ds is a dict with 'varname', 'datastream_id' and 'data_type'
+            datastream_id = ds["datastream_id"]
+            varname = ds["varname"]
+            if variables and varname not in variables:
+                continue
+
+            data_columns = {
+                "json": "RESULT_JSON",
+                "files": "RESULT_STRING"
+            }
+            col = data_columns[conf["dataType"]]
+
+            # Query the regular OBSERVATIONS table
+            q = (f'''
+                select
+                    "PHENOMENON_TIME_START" as timestamp,
+                    "{col}" as "{varname}"      
+                from
+                    "OBSERVATIONS"
+                where
+                    "DATASTREAM_ID" = {datastream_id}
+                    and "PHENOMENON_TIME_START" between \'{time_start}\' and \'{time_end}\';
+            ''')
+            df = self.sta.dataframe_from_query(q, debug=False)
+
+            if not df.empty:
+                sensor_dataframes.append(df)
+
+        if not sensor_dataframes:
+            return pd.DataFrame()  # return an empty dataframe
+
+        df = merge_dataframes_by_columns(sensor_dataframes)
+        df = df.rename(columns={"timestamp": "TIME"})
+        df = df.set_index("TIME")
+        df = df.sort_index(ascending=True)
+        return df
+
+
     def netcdf_from_sta(self, conf, time_start: pd.Timestamp = None, time_end: pd.Timestamp = None):
         """
         Creates a NetCDF file according to the configuration
@@ -689,7 +788,20 @@ class DataCollector(LoggerSuperclass):
                 df["SENSOR_ID"] = sensor_name
             dataframes.append(df)
 
-        df = merge_dataframes(dataframes)
+        try:
+            merge_sensors = conf["dataSourceOptions"]["mergeSensors"]
+        except KeyError:
+            merge_sensors = False
+            pass
+
+        if merge_sensors:
+            # If merge sensors, merge dataframe by index ignoring SENSOR_ID
+            for df in dataframes:
+                del df["SENSOR_ID"]
+            df = merge_dataframes_by_columns(dataframes)
+        else:
+            df = merge_dataframes(dataframes)
+
         df.to_csv(filename)
         return filename
 
@@ -923,6 +1035,7 @@ class DataCollector(LoggerSuperclass):
         """
         Takes a dataset in the FileServer and publish it to CKAN as a resource
         """
+        rich.print(f"UPLOADING FILE TO CKAN {dataset.url}")
         assert type(ckan) is CkanClient
         assert type(dataset) is DatasetObject
 
@@ -932,6 +1045,7 @@ class DataCollector(LoggerSuperclass):
 
         name = f"{dataset.dataset_id} data from {dataset.tstart_str('%Y-%m-%d')} to {dataset.tend_str('%Y-%m-%d')}"
         description = f"Data in {dataset.fmt} format from {dataset.tstart_str()} to {dataset.tend_str()}"
+        self.info(f"registering dataset url: {dataset.url}")
         return ckan.resource_create(
             package_id,
             resource_id,

@@ -19,6 +19,7 @@ from mmm.core import load_fields_from_dict, bulk_load_data
 if __name__ == "__main__":
     argparser = ArgumentParser()
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets.yaml")
+    argparser.add_argument("-n", "--no-qc", help="Put an NO_QC flag to all empty QC", action="store_true")
     argparser.add_argument("file", help="Data file", type=str)
     argparser.add_argument("sensor_id", help="Sensor ID", type=str)
     argparser.add_argument("-a", "--average", help="Averaged data (period must be specified)", type=str, default="")
@@ -27,6 +28,7 @@ if __name__ == "__main__":
     argparser.add_argument("-p", "--profiles", help="Profile data", action="store_true")
     argparser.add_argument("-j", "--json", help="JSON-like data, such as AI-inference data", action="store_true")
     argparser.add_argument("-f", "--files", help="Files data (register the paths)", action="store_true")
+    argparser.add_argument("--usecs", help="use microsecond precision", action="store_true")
     argparser.add_argument("-F", "--foi", help="FeatureOfInterest ID to assign to the Observations", type=int, required=True)
     args = argparser.parse_args()
     
@@ -55,7 +57,8 @@ if __name__ == "__main__":
         raise ValueError(f"Unimplemented type!")
 
     rich.print(f"[cyan]Bulk load data from sensor {args.sensor_id} file {args.file}")
-    bulk_load_data(args.file, psql_conf, url, args.sensor_id, data_type, args.foi, average=args.average)
+    bulk_load_data(args.file, psql_conf, url, args.sensor_id, data_type, args.foi, average=args.average, no_qc=args.no_qc,
+                   usecs=args.usecs)
 
 
 

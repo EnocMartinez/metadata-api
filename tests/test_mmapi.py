@@ -540,7 +540,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "@people": "enoc_martinez",
                     "role": "dataManager"
                 }
-            ]
+            ],
+            "dataMode": "real-time"
         }  # SBE37
         self.mc.insert_document("sensors", d)
         d = {
@@ -609,7 +610,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "@people": "enoc_martinez",
                     "role": "dataManager"
                 }
-            ]
+            ],
+            "dataMode": "real-time"
         }  # SBE16
         self.mc.insert_document("sensors", d)
 
@@ -808,7 +810,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "@organizations": "upc",
                     "role": "owner"
                 }
-            ]
+            ],
+            "dataMode": "real-time"
         }  # AWAC sensor
         post_json(self.mmapi_url + "/sensors", d)
 
@@ -950,7 +953,8 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
                     "@organizations": "upc",
                     "role": "owner"
                 }
-            ]
+            ],
+            "dataMode": "real-time"
         }  # IPC608 camera
         post_json(self.mmapi_url + "/sensors", d)
 
@@ -1499,7 +1503,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "underwater_photography", "files")
         for i in range(len(files)):
             file = files[i]
-            path = fileserver.send_file("pictures", file)
+            path = fileserver.send_file(f"pictures/IPC608", file)
             foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
             d = {
                 "phenomenonTime": dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -1556,7 +1560,7 @@ class TestMMAPI(unittest.TestCase, LoggerSuperclass):
         datastream_id = self.dc.sta.get_datastream_id("IPC608", "OBSEA", "underwater_photography", "files")
         foi_id = self.dc.sta.value_from_query('select "ID" from "FEATURES" limit 1;')
         for i in range(len(pictures)):
-            url = self.dc.fileserver.send_file("pictures", pictures[i])
+            url = self.dc.fileserver.send_file("pictures/IPC608", pictures[i])
             data["timestamp"].append(dates[i].strftime('%Y-%m-%dT%H:%M:%SZ'))
             data["results"].append(url)
             data["datastream_id"].append(datastream_id)

@@ -10,7 +10,7 @@ created: 4/10/23
 """
 
 from argparse import ArgumentParser
-from mmm import DataCollector, setup_log
+from mmm import DataCollector, setup_log, CkanClient
 import yaml
 import rich
 import logging
@@ -20,7 +20,8 @@ import os
 
 
 def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_end: str, secrets,
-                     current=False, format:str= "", verbose=False, erddap_config=False, log=None) -> list:
+                     current=False, format:str= "", verbose=False, erddap_config=False, log=None, ckan=None
+                     ) -> list:
     """
     Generate a dataset following the configuration in the metadata database dataset register.
     :param dataset_id: id of the dataset register
@@ -52,7 +53,7 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
 
     log.info(f"Generated {len(datasets)} data files")
     for dataset in datasets:
-        dataset.deliver()
+        dataset.deliver(fileserver=dc.fileserver)
     dataset = datasets[-1]
 
     if service_name == "erddap" and erddap_config:
@@ -63,6 +64,13 @@ def generate_dataset(dataset_id: str, service_name: str, time_start: str, time_e
             erddap_uid=secrets["erddap"]["uid"]
         )
 
+    elif service_name == "fileserver" and ckan:
+        ckan_url = secrets["ckan"]["url"]
+        ckan_key = secrets["ckan"]["api_key"]
+
+        ckan = CkanClient(dc.mc, ckan_url, ckan_key)
+        for dataset in datasets:
+            dc.upload_datafile_to_ckan(ckan, dataset)
 
 def list_datasets(secrets, verbose=False):
     with open(secrets) as f:
@@ -85,6 +93,7 @@ if __name__ == "__main__":
     argparser.add_argument("-v", "--verbose", help="verbose output", action="store_true")
     argparser.add_argument("-F", "--force", help="Overwrite any existing dataset", action="store_true")
     argparser.add_argument("-e", "--erddap", help="Configure dataset in erddap", action="store_true")
+    argparser.add_argument("-c", "--ckan", help="Register dataset in CKAN, use it with fileserver only", action="store_true")
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False,
                            default="secrets.yaml")
     argparser.add_argument("-t", "--time-range", help="Time range with ISO notation, like 2022-01-01/2023-01-01",
@@ -115,5 +124,5 @@ if __name__ == "__main__":
 
 
     generate_dataset(args.dataset_id, args.service, tstart, tend, args.secrets, format=args.format,
-                     current=args.current, verbose=args.verbose, erddap_config=args.erddap)
+                     current=args.current, verbose=args.verbose, erddap_config=args.erddap, ckan=args.ckan)
 

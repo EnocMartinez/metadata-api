@@ -18,7 +18,7 @@ import logging
 
 
 def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str, destination: str, foi_id: int,
-                    log: logging.Logger, do_not_send=False):
+                    log: logging.Logger, do_not_send=False, usecs=False):
 
     sta_data = { # SensorThings data
         "timestamp": [],
@@ -80,7 +80,7 @@ def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str,
     else:
         log.info("Sending all files")
         dc.fileserver.bulk_send(list(fs_df["src"]), list(fs_df["dst"]))
-    bulk_load_data(csv_filename, secrets["sensorthings"], "", sensor_name, "files")
+    bulk_load_data(csv_filename, secrets["sensorthings"], "", sensor_name, "files", usecs=usecs)
 
 
 
@@ -96,6 +96,8 @@ if __name__ == "__main__":
     argparser.add_argument("-n", "--split", help="Split files into N-length arrays", type=int, default=2000)
     argparser.add_argument("--do-not-send", help="Do not send files, assuming they are already in the server",
                            action="store_true")
+    argparser.add_argument("--usecs", help="use microsecond precision", action="store_true")
+
     args = argparser.parse_args()
     all_files = file_list(args.path)
     all_files = sorted(all_files)
@@ -153,8 +155,5 @@ if __name__ == "__main__":
     if args.sensor_name not in destination:
         raise ValueError(f"Sensor name {args.sensor_name} not found in destination path: {args.sensor_name}")
 
-    bulk_load_files(dc,all_files, args.path, args.sensor_name, destination, foi_id, log, do_not_send=args.do_not_send)
-
-
-
-
+    bulk_load_files(dc,all_files, args.path, args.sensor_name, destination, foi_id, log, do_not_send=args.do_not_send,
+                    usecs=args.usecs)

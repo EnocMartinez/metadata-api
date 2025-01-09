@@ -212,7 +212,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
 
         return {key: value for key, value in response}
 
-    def inject_to_timeseries(self, df, datastreams, max_rows=100000, disable_triggers=False,
+    def inject_to_timeseries(self, df, datastreams, max_rows=100000, disable_triggers=False, usecs=False,
                              tmp_folder="/tmp/sta_db_copy/data", tmp_folder_db="/tmp/sta_db_copy/data"):
         """
         Inject all data in df into the timeseries table via SQL copy
@@ -224,7 +224,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         rich.print("Splitting input dataframe into smaller ones")
         rows = int(max_rows / len(datastreams))
         dataframes = slice_dataframes(df, max_rows=rows)
-        files = self.dataframes_to_timeseries_csv(dataframes, datastreams, tmp_folder)
+        files = self.dataframes_to_timeseries_csv(dataframes, datastreams, tmp_folder, usecs=usecs)
         rich.print("Generating all files took %0.02f seconds" % (time.time() - init))
 
         if self.host != "localhost" and self.host != "127.0.0.1":
@@ -351,7 +351,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
 
     # TODO: Merge inject_to_files, inject_to_inference, inject_to_observations into a single function!
     def inject_to_files(self, df, max_rows=10000, disable_triggers=False, tmp_folder="/tmp/sta_db_copy/data",
-                        tmp_folder_db="/tmp/sta_db_copy/data"):
+                        tmp_folder_db="/tmp/sta_db_copy/data", usecs=False):
         """
         Inject all data in df into the timeseries table via SQL copy. This function expects a DataFrame with the
         timestamp as index and the following columns:
@@ -365,7 +365,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         rich.print("Splitting input dataframe into smaller ones")
         rows = int(max_rows)
         dataframes = slice_dataframes(df, max_rows=rows)
-        files = self.dataframes_to_files_csv(dataframes, tmp_folder)
+        files = self.dataframes_to_files_csv(dataframes, tmp_folder, usecs=usecs)
         rich.print("Generating all files took %0.02f seconds" % (time.time() - init))
 
         if self.host != "localhost" and self.host != "127.0.0.1":
@@ -503,7 +503,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
 
         return files
 
-    def dataframes_to_timeseries_csv(self, dataframes: list, column_mapper: dict, folder: str):
+    def dataframes_to_timeseries_csv(self, dataframes: list, column_mapper: dict, folder: str, usecs=False):
         """
         Write dataframes into local csv files ready for sql copy following the syntax in table OBSERVATIONS
         """
@@ -516,7 +516,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 file = os.path.join(folder, f"timeseries_copy_{i:04d}.csv")
                 i += 1
                 rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
-                self.format_timeseries_csv(dataframe, column_mapper, file)
+                self.format_timeseries_csv(dataframe, column_mapper, file, usecs=usecs)
                 files.append(file)
         return files
 
@@ -537,7 +537,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 files.append(file)
         return files
 
-    def dataframes_to_files_csv(self, dataframes: list, folder):
+    def dataframes_to_files_csv(self, dataframes: list, folder, usecs=False):
         i = 0
         files = []
         with Progress() as progress:
@@ -547,7 +547,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 file = os.path.join(folder, f"files_copy_{i:04d}.csv")
                 i += 1
                 rich.print(f"format timeseries CSV {i:04d} of {len(dataframes)}")
-                self.format_files_csv(dataframe, file)
+                self.format_files_csv(dataframe, file, usecs=usecs)
                 files.append(file)
         return files
 
@@ -703,7 +703,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
                 df = df.rename(columns={col: col.replace("_qc", "_QC")})
         return df
 
-    def format_timeseries_csv(self, df_in, column_mapper, filename):
+    def format_timeseries_csv(self, df_in, column_mapper, filename, usecs=False):
         """
         Format from a regular dataframe to a Dataframe ready to be copied into a TimescaleDB simple table
         :param df_in:
@@ -725,7 +725,10 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
             df["timestamp"] = df.index.values
             df = df[keep]
             df = df.dropna(subset=[colname], how='all')  # drop NaNs in column name
-            df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+            if not usecs:
+                df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+            else:
+                df["time"] = df["timestamp"].dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
             df["datastream_id"] = datastream_id
             df = df.set_index("time")
             df = df.rename(columns={colname: "value", colname + "_QC": "qc_flag", colname + "_QC": "qc_flag"})
@@ -793,7 +796,7 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         del df
         gc.collect()
 
-    def format_files_csv(self, df_in, filename):
+    def format_files_csv(self, df_in, filename, usecs=False):
         """
         Takes a dataframe and arranges it accordingly to the OBSERVATIONS table from a SensorThings API, preparing the
         data to be inserted by a COPY statement
@@ -810,9 +813,16 @@ class SensorThingsApiDB(PgDatabaseConnector, LoggerSuperclass):
         df = df_in.copy(deep=True)
         df = df.dropna(subset=["results"], how='all')  # drop NaNs in column name
 
-        df["PHENOMENON_TIME_START"] = np.datetime_as_string(df.index.values, unit="s", timezone="UTC")
+        if usecs:
+            df["PHENOMENON_TIME_START"] = np.datetime_as_string(df.index.values, unit="us", timezone="UTC")
+        else:
+            df["PHENOMENON_TIME_START"] = np.datetime_as_string(df.index.values, unit="s", timezone="UTC")
+
         if "timeEnd" in df.columns:  # if we have the average period
-            df["PHENOMENON_TIME_END"] = np.datetime_as_string(df["timeEnd"], unit="s", timezone="UTC")
+            if usecs:
+                df["PHENOMENON_TIME_END"] = np.datetime_as_string(df["timeEnd"], unit="us", timezone="UTC")
+            else:
+                df["PHENOMENON_TIME_END"] = np.datetime_as_string(df["timeEnd"], unit="s", timezone="UTC")
         else:
             df["PHENOMENON_TIME_END"] = df["PHENOMENON_TIME_START"]
         df["RESULT_TIME"] = df["PHENOMENON_TIME_START"]

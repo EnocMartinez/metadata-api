@@ -19,17 +19,18 @@ import rich
 if __name__ == "__main__":
     argparser = ArgumentParser()
     argparser.add_argument("-s", "--secrets", help="Another argument", type=str, required=False, default="secrets.yaml")
-    argparser.add_argument("-c", "--collections", help="Only use certain collections (comma-separated list)", default="")
+    argparser.add_argument("-c", "--collections", help="Only use certain collections", type=str, nargs="+", default=[])
+    argparser.add_argument("-d", "--datasets", help="Propagate only datasets in list", type=str, nargs="+", default=[])
 
     args = argparser.parse_args()
     
     with open(args.secrets) as f:
         secrets = yaml.safe_load(f)["secrets"]
-    collections = args.collections.split(",")
+    collections = args.collections
     if not args.collections:
         collections = ["datasets", "organizations"]
     else:
-        collections = args.collections.split(",")
+        collections = args.collections
 
     mc = init_metadata_collector(secrets)
 
@@ -47,4 +48,4 @@ if __name__ == "__main__":
     # rich.print(f"CKAN key {key}")
 
     ckan = CkanClient(mc, secrets["ckan"]["url"], secrets["ckan"]["api_key"])
-    propagate_metadata_to_ckan(mc, ckan, collections)
+    propagate_metadata_to_ckan(mc, ckan, collections, datasets=args.datasets)

@@ -178,7 +178,7 @@ if __name__ == "__main__":
     argparser.add_argument("-p", "--put", help="Puts all metadata from folder and  and stores it to JSON", action="store_true")
     argparser.add_argument("-S", "--status", help="Shows documents that have been modified", action="store_true")
     argparser.add_argument("--clear", help="Clear temporal files", action="store_true")
-    argparser.add_argument("-c", "--collections", help="Only use certain collections (comma-separated list)", default=[])
+    argparser.add_argument("-c", "--collections", help="Only use certain collections", nargs="+", default=[])
     argparser.add_argument("-f", "--folder", help="folder to store all metadata, by default 'Metadata'", type=str, default="Metadata")
     argparser.add_argument("-v", "--verbose", help="Show more info", action="store_true")
     argparser.add_argument("--clear-history", help="Delete ALL history and reset version to 1", action="store_true")
@@ -200,7 +200,7 @@ if __name__ == "__main__":
 
     collections = mc.collection_names
     if args.collections:
-        collections = args.collections.split(",")
+        collections = args.collections
 
     if args.healthcheck:
         mc.healthcheck(collections=collections)

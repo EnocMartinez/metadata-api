@@ -139,11 +139,13 @@ def timestamp_from_filename(filename)-> pd.Timestamp:
     # Make sure to convert all spaces and underscores to hyphens
     filename = filename.replace("_", "-").replace(" ", "-")
 
-    patterns = {
-        "%Y%m%d-%H%M%S": "20201231-235959",
-        "%Y-%m-%dT%H:%M:%S": "2020-12-31T23:59:59"
-    }
-    for pattern, example in patterns.items():
+    patterns = [
+        ("%Y%m%d-%H%M%S.%f", "20201231-235959.123456"),  # microsecond
+        ("%Y%m%d-%H%M%S.%f", "20201231-235959.123"),  # millisecond
+        ("%Y%m%d-%H%M%S", "20201231-235959"),
+        ("%Y-%m-%dT%H:%M:%S", "2020-12-31T23:59:59"),
+    ]
+    for pattern, example in patterns:
         try:
             f = filename[:len(example)]  # get only the beginning
             return pd.to_datetime(f, format=pattern)
@@ -503,11 +505,10 @@ def assert_type(obj, valid_type):
     :param obj:  any object
     :param valid_type:  any type
     """
-
     assert isinstance(obj, valid_type), f"Expected {valid_type}, but got {type(obj)} instead"
 
 
-def assert_types(obj, valid_types):
+def assert_types(obj, valid_types: list):
     """
     Asserts that obj is of type <valid_type>
     :param obj:  any object

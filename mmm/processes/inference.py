@@ -42,7 +42,9 @@ def inference_process(sensor: dict, process: dict, mc: MetadataCollector, obs_pr
             rich.print(f"[red]ERROR, expected key {k} in inference configuration")
     deployments = get_sensor_deployments(mc, sensor["#id"])
     processed_stations = []
-    for station, time in deployments:
+    for dep in deployments:
+        station = dep["station"]
+        time = dep["start"]
         if station in processed_stations:
             # Already processed
             continue

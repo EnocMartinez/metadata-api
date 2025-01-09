@@ -22,7 +22,10 @@ def average_process(sensor: dict, process: dict, parameters: dict, mc: MetadataC
 
     sensor_name = sensor["#id"]
     sensor_deployments = get_sensor_deployments(mc, sensor_name)
-    for station, deployment_time in sensor_deployments:
+    for dep in sensor_deployments:
+        station = dep["station"]
+        deployment_time = dep["start"]
+
         station_doc = mc.get_document("stations", station)
         period = parameters["period"]
         for var in sensor["variables"]:

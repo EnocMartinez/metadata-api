@@ -11,6 +11,9 @@ created: 30/11/22
 """
 import logging
 import time
+
+from numpy.core.defchararray import upper
+
 from mmm.data_sources.postgresql import PgDatabaseConnector
 import datetime
 import json
@@ -735,9 +738,9 @@ class MetadataCollector(LoggerSuperclass):
                     warnings.append(w)
 
             # Check deployments
-            deps = get_sensor_deployments(self, doc["#id"])
+            deps = self.get_sensor_deployments(doc["#id"])
             if len(deps) < 1:
-                w = f"{collection}:{doc['#id']} doesn't have any deployement!"
+                w = f"{collection}:{doc['#id']} doesn't have any deployment!"
                 rich.print(f"[yellow]{w}")
                 warnings.append(w)
 
@@ -905,74 +908,173 @@ class MetadataCollector(LoggerSuperclass):
         return pd.Timestamp(doc["time"])
 
 
+    def __get_deployments(self, element_type, identifier) -> []:
+
+        # Get all activities and involving this station
+        sql_filter = f"where doc->'appliedTo'->>'@{element_type}' = '{identifier}'"
+        hist = self.get_documents("activities", filter=sql_filter)
+
+        act_deployments = [d for d in hist if d["type"] == "deployment"]  # keep all deployments
+        act_recoveries = [d for d in hist if d["type"] in ["recovery", "loss"]]  # keep all recoveries/losses
+        if len(act_deployments) == 0:
+            raise LookupError(f"No deployments found for {element_type} {identifier}")
+
+        recover_dates = [pd.to_datetime(r["time"]) for r in act_recoveries]  # Keep only the dates
+        recover_dates = sorted(recover_dates)
+
+        deployments = []
+        for d in act_deployments:
+            deployment = {
+                "start": pd.to_datetime(d["time"]),
+                "end": None,
+            }
+            if "position" in d["where"].keys():
+                deployment["coordinates"] = d["where"]["position"]
+            if "@stations" in d["where"].keys():
+                deployment["station"] = d["where"]["@stations"]
+
+            deployments.append(deployment)
+
+        deployments = sorted(deployments, key=lambda x: x["start"])
+
+        for i in range(len(deployments)):
+            deployment = deployments[i]
+            # recovery upper limit
+            upper_limit = pd.to_datetime("2100-01-01", utc=True)
+            if i == len(deployments) - 1:
+                # This is the last element, no further deployments
+                pass
+            else:
+                upper_limit = pd.to_datetime(deployments[i + 1]["start"])
+
+            candidates = []
+            for timestamp in recover_dates:
+
+                # Get the timestamp
+                if deployment["start"] < timestamp <= upper_limit:
+                    candidates.append(timestamp)
+
+            if len(candidates) > 0:
+                deployment["end"] = min(candidates)  # The first candidate is the valid recovery time
+
+        return deployments
+
+
+    def get_sensor_deployments(self, sensor: dict|str) -> list:
+        """
+        Returns a list of dicts with the info of each deployment registered in the sensor.
+            [
+                {
+                    "start": pd.Timestamp,
+                    "end": pd.Timestamp|None,
+                    "station": station_id
+                    "coordinates": { "latitude": XX, "longitude": YY, "depth": ZZ }
+                },
+                ...
+            ]
+        """
+        assert_types(sensor, [str, dict])
+        if type(sensor) is str:
+            sensor_id = sensor
+        elif type(sensor) is dict:
+            sensor_id = sensor["#id"]
+            pass
+        else:
+            raise ValueError(f"Wrong type in station, expected str or dict, got {type(sensor)}")
+
+        deployments = self.__get_deployments("sensors", sensor_id)
+        for deployment in deployments:
+            station_id = deployment["station"]
+            latitude, longitude, depth = self.get_station_coordinates(station_id, timestamp=deployment["start"])
+            deployment["coordinates"] = {"latitude": latitude, "longitude": longitude, "depth": depth}
+
+        return deployments
+
+    def get_station_deployments(self, station: dict|str) -> list:
+        """
+        Returns a list of dicts with the info of each deployment registered in the station:
+            [
+                {
+                    "start": pd.Timestamp,
+                    "end": pd.Timestamp|None,
+                    "coordinates": { "latitude": XX, "longitude": YY, "depth": ZZ }
+                },
+                ...
+            ]
+        """
+        assert_types(station, [str, dict])
+        if type(station) is str:
+            station = self.get_document("stations", station)
+        elif type(station) is dict:
+            pass
+        else:
+            raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
+
+        station_id = station["#id"]
+        return self.__get_deployments("stations", station_id)
+
+    def get_station_coordinates(self, station: any, timestamp=None) -> (float, float, float):
+        """
+        Looks for the latest coordinates of a station based on its deployment history. Station may be station_id (str) or
+        the station document (dict)
+        :param mc: Metadata collector
+        :param station: station or station:D
+        :param timestamp: if set, get the coordinates in a specific timestamp
+        """
+        if type(station) is str:
+            station = self.get_document("stations", station)
+        elif type(station) is dict:
+            pass
+        else:
+            raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
+
+        assert_types(timestamp, [type(None), str, pd.Timestamp])
+
+        deployments = self.get_station_deployments(station)
+
+        if isinstance(timestamp, str):
+            timestamp = pd.Timestamp(timestamp)
+
+        if not timestamp:
+            # Get the latest deployment
+            latitude = deployments[-1]["coordinates"]["latitude"]
+            longitude = deployments[-1]["coordinates"]["longitude"]
+            depth = deployments[-1]["coordinates"]["depth"]
+            return latitude, longitude, depth
+        else:
+            for deployment in reversed(deployments):
+                if timestamp >= deployment["start"]:
+                    latitude = deployment["coordinates"]["latitude"]
+                    longitude = deployment["coordinates"]["longitude"]
+                    depth = deployment["coordinates"]["depth"]
+                    return latitude, longitude, depth
+
+        station_id = station["#id"]
+        raise LookupError(f"Station {station_id} coordinates not found! (timestamp={timestamp}")
+
+
+    def get_station_history(self, name: str) -> list:
+        """
+        Looks for all activities with the
+        """
+        sql_filter = f" where doc->'appliedTo'->>'@stations' = '{name}'"
+        activities = self.get_documents("activities", filter=sql_filter)
+        history = []
+        for a in activities:
+            h = load_fields_from_dict(a, ["time", "type", "description", "where/position"],
+                                      rename={"where/position": "position"})
+            history.append(h)
+
+        # Sort based on history
+        history = sorted(history, key=lambda x: x['time'])
+        return history
 
 
 def get_station_deployments(mc: MetadataCollector, station: dict) -> list:
-    """
-    Looks for all the station deployment
-    [
-        ((lat, lon, depth), date1),
-        ((lat, lon, depth), date2),
-        ...
-    ]
-    """
-    assert type(mc) is MetadataCollector
-    if type(station) is str:
-        station = mc.get_document("stations", station)
-    elif type(station) is dict:
-        pass
-    else:
-        raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
-
-    station_id = station["#id"]
-    deployments = []  # array of (stationId, deploymentTime)
-
-    # Get all activities with type=deployment and involving this station
-    sql_filter = f"where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@stations' = '{station_id}'"
-    hist = mc.get_documents("activities", filter=sql_filter)
-
-    for dep in hist:
-        deployment_time = dep["time"]
-
-        # The deployment station can be at the 'appliedTo' or at 'where' section
-        if "position" not in dep["where"].keys():
-            raise ValueError("A station deployment should ALWAYS use a 'position'")
-
-        deployments.append((dep, deployment_time))
-
-    if len(deployments) == 0:
-        raise LookupError(f"No deployments found for station {station_id}")
-
-    deployments = sorted(deployments, key=lambda x: x[1])  # order by time
-    return deployments
-
+    return mc.get_station_deployments(station)
 
 def get_sensor_deployments(mc: MetadataCollector, sensor_id: str) -> list:
-    """
-    Looks for all stations where a sensor has been deployed. If t
-        [
-        (station1, date1),
-        (station2, date2),
-        ...
-    ]
-    """
-    assert type(mc) is MetadataCollector
-    assert type(sensor_id) is str
-    # Get all activities with type=deployment and involving this sensor
-    sql_filter = f" where doc->>'type' = 'deployment' and doc->'appliedTo'->>'@sensors' = '{sensor_id}'"
-    deployments = mc.get_documents("activities", filter=sql_filter)
-    sensor_deployments = []
-    for dep in deployments:
-        if "@sensors" in dep["appliedTo"].keys() and sensor_id in dep["appliedTo"]["@sensors"]:
-            # We can have the station in "where" or in "appliedTo"
-            if "@stations" not in dep["where"].keys():
-                raise ValueError("Error in activity {dep['#id']} sensor deployment without where->@stations field")
-
-            sensor_deployments.append((dep["where"]["@stations"], dep["time"]))
-
-    sensor_deployments = sorted(sensor_deployments, key=lambda x: x[1])
-    return sensor_deployments
-
+    return mc.get_sensor_deployments(sensor_id)
 
 def get_sensor_latest_deployment(mc: MetadataCollector, sensor_id: str) -> list:
     """
@@ -981,43 +1083,8 @@ def get_sensor_latest_deployment(mc: MetadataCollector, sensor_id: str) -> list:
     deployments = get_sensor_deployments(mc, sensor_id)
     return deployments[-1][0]
 
-
-def get_station_coordinates(mc: MetadataCollector, station: any) -> (float, float, float):
-    """
-    Looks for the latest coordinates of a station based on its deployment history. Station may be station_id (str) or
-    the station document (dict)
-    """
-    if type(station) is str:
-        station = mc.get_document("station", station)
-    elif type(station) is dict:
-        pass
-    else:
-        raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
-    deployments = get_station_deployments(mc, station)
-
-    for deployment, time in reversed(deployments):
-        # Get the latest deployment
-        latitude = deployment["where"]["position"]["latitude"]
-        longitude = deployment["where"]["position"]["longitude"]
-        depth = deployment["where"]["position"]["depth"]
-        break
-
-    return latitude, longitude, depth
-
-
+def get_station_coordinates(mc: MetadataCollector, station: any, timestamp=None) -> (float, float, float):
+    return mc.get_station_coordinates(station, timestamp=timestamp)
 
 def get_station_history(mc: MetadataCollector, name: str) -> list:
-    """
-    Looks for all activities with the
-    """
-    sql_filter = f" where doc->'appliedTo'->>'@stations' = '{name}'"
-    activities = mc.get_documents("activities", filter=sql_filter)
-    history = []
-    for a in activities:
-        h = load_fields_from_dict(a, ["time", "type", "description", "where/position"],
-                                  rename={"where/position": "position"})
-        history.append(h)
-
-    # Sort based on history
-    history = sorted(history, key=lambda x: x['time'])
-    return history
+    return mc.get_station_history(name)

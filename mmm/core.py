@@ -37,7 +37,7 @@ def get_properties(doc: dict, properties: list) -> dict:
     return data
 
 
-def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = []):
+def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collections: list = [], datasets: list = []):
     """
     Propagates metadata from metadata database to CKAN
 
@@ -120,6 +120,9 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
     if "datasets" in collections:
         for doc in mc.get_documents("datasets"):
             name = doc["#id"]
+            if datasets and name not in datasets:
+                rich.print(f"[grey42]skipping dataset {name}")
+                continue
             dataset_id = name.lower()
             package_name = dataset_id
 
@@ -153,7 +156,7 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
                     name = mc.get_people(contact["@people"])["name"]
                 elif "@organizations" in contact.keys():
                     name = mc.get_organization(contact["@organizations"])["fullName"]
-                    if role == "owner":  # assign the owner organization
+                    if role == "RightsHolder":  # assign the owner organization
                         owner = contact["@organizations"].lower()
 
                 if role not in extras.keys():
@@ -161,11 +164,12 @@ def propagate_metadata_to_ckan(mc: MetadataCollector, ckan: CkanClient, collecti
                 else:
                     extras[role] += ", " + name
 
-            for contact in station["contacts"]:
-                role = contact["role"]
-                if "@organizations" in contact.keys():
-                    if role == "owner":  # assign the owner organization
-                        owner = contact["@organizations"].lower()
+            if not owner:
+                for contact in station["contacts"]:
+                    role = contact["role"]
+                    if "@organizations" in contact.keys():
+                        if role == "owner":  # assign the owner organization
+                            owner = contact["@organizations"].lower()
 
             groups = []  # assign to ckan groups
             if "funding" in doc.keys():
@@ -223,7 +227,6 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                 for key, value in doc["properties"].items():
                     properties[key] = doc["properties"][key]
             s = Sensor(name, description, metadata="", properties=properties)
-            rich.print(properties)
             s.register(url, update=update, verbose=True)
             sensor_ids[sensor_id] = s.id
 
@@ -279,7 +282,9 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
         if len(sensor_deployments) < 1:
             raise ValueError(f"Sensor {sensor['#id']} does not have a deployment!")
         stations_processed = []
-        for station, deployment_time in sensor_deployments:
+        for deployment in sensor_deployments:
+            station = deployment["station"]
+            deployment_time = deployment["start"]
             if station in stations_processed:
                 rich.print(f"[yellow]Skipping station {station}")
                 continue  # already processed for this sensor
@@ -384,8 +389,8 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
                     exit(-1)
 
 
-def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, data_type,
-                   foi_id: int = 0, average="", tmp_folder="/tmp/sta_db_copy/data") -> bool:
+def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, data_type, foi_id: int = 0, average="",
+                   usecs=False, no_qc=False, tmp_folder="/tmp/sta_db_copy/data") -> bool:
     """
     This function performs a bulk load of the data contained in the input file
 
@@ -405,7 +410,8 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
             "%Y-%m-%dT%H:%M:%Sz",
             "%Y-%m-%d %H:%M:%S",
             "%Y/%m/%d %H:%M:%S",
-            "%d/%m/%Y %H:%M:%S"
+            "%d/%m/%Y %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
         ]
         for time_format in time_formats:
             try:
@@ -426,6 +432,17 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
 
     if df.empty:
         raise ValueError("Empty dataframe!")
+
+    if no_qc:
+        for var in df.columns:
+            if var.endswith("_QC"):
+                continue
+            elif var + "_QC" in df.columns:
+                # we already have a qc column
+                continue
+            else:
+                rich.print(f"[yellow]Forcing QC=2 for {var}")
+                df[var + "_QC"] = 2
 
     if data_type not in ["profiles", "detections"]:
         df = drop_duplicated_indexes(df, keep="first")
@@ -453,7 +470,7 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
                 row["variable_name"]: row["datastream_id"] for _, row in datastreams_conf.iterrows()
             }
             df = drop_duplicated_indexes(df)
-            db.inject_to_timeseries(df, datastreams, tmp_folder=tmp_folder)
+            db.inject_to_timeseries(df, datastreams, tmp_folder=tmp_folder, usecs=usecs)
 
         else:  # averaged timeseries
             datastreams_conf = db.get_datastream_config(sensor=sensor_name, data_type=data_type, average_period=average)
@@ -480,7 +497,7 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
         db.inject_to_detections(df, tmp_folder=tmp_folder)
 
     elif data_type == "files":
-        db.inject_to_files(df, tmp_folder=tmp_folder)
+        db.inject_to_files(df, tmp_folder=tmp_folder, usecs=usecs)
 
     elif data_type == "json":
         db.inject_to_json(df)

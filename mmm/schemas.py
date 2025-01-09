@@ -55,6 +55,11 @@ __data_types__ = {
     "enum": mmapi_data_types
 }
 
+__dataset_data_types__ = {
+    "type": "string",
+    "enum": mmapi_data_types + ["mixed"]  # for datasets allow the use of multi-type datasets
+}
+
 
 # ----------- Conventions ------------ #
 __doi_roles__ = [  # Roles for dataset attribution from MetadataKernel
@@ -361,7 +366,7 @@ __datasets = {
                 }
             }
         },
-        "dataType": __data_types__,  # may be redundant, but helps parsing info
+        "dataType": __dataset_data_types__,  # may be redundant, but helps parsing info
         "dataSourceOptions": {"type": "object"},
         "dataMode": {"type": "string", "enum": ["real-time", "delayed", "mixed", "provisional"]},
         "export": {
@@ -465,7 +470,7 @@ __operations = {
 __variable_types = [
     "environmental",  # Physical or chemical variables measured in the environment e.g. temperature, speed, pH, etc.
     "biodiversity",   # biodiversity variables such as species detections
-    "technical"       # technical data of no scientific interest, e.g. battery voltage, available memory, etc.
+    "technical"       # technical data e.g. battery voltage, available memory, GPS position, etc.
 ]
 
 __variables = {
