@@ -252,7 +252,7 @@ def run_over_ssh(host, cmd, fail_exit=False):
         return run_subprocess(cmd, fail_exit=fail_exit)
 
 
-def run_subprocess(cmd, fail_exit=False):
+def run_subprocess(cmd, fail_exit=True):
     """
     Runs a command as a subprocess. If the process retunrs 0 returns True. Otherwise prints stderr and stdout and returns False
     :param cmd: command (list or string)

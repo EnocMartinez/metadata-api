@@ -412,6 +412,7 @@ def bulk_load_data(filename: str, psql_conf: dict, url: str, sensor_name: str, d
             "%Y/%m/%d %H:%M:%S",
             "%d/%m/%Y %H:%M:%S",
             "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S.%fZ"
         ]
         for time_format in time_formats:
             try:

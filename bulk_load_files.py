@@ -18,7 +18,7 @@ import logging
 
 
 def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str, destination: str, foi_id: int,
-                    log: logging.Logger, do_not_send=False, usecs=False):
+                    log: logging.Logger, do_not_send=False, usecs=False, no_date=False):
 
     sta_data = { # SensorThings data
         "timestamp": [],
@@ -43,7 +43,12 @@ def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str,
         sta_data["timestamp"].append(t)
 
         # full filename in the data server
-        file_dest = os.path.join(destination,  t.strftime("%Y/%m/%d"), os.path.basename(file))
+        if no_date:
+            file_dest = os.path.join(destination, os.path.basename(file))
+        else:
+            file_dest = os.path.join(destination,  t.strftime("%Y/%m/%d"), os.path.basename(file))
+
+
 
         sta_data["results"].append(dc.fileserver.path2url(file_dest))
         sta_data["datastream_id"].append(datastream_id)
@@ -52,7 +57,6 @@ def bulk_load_files(dc: DataCollector, files: list, path: str, sensor_name: str,
 
         fs_data["timestamp"].append(t)
         fs_data["src"].append(file)
-        file_dest = os.path.join(destination,  t.strftime("%Y/%m/%d"), os.path.basename(file))
         fs_data["dst"].append(file_dest)
 
 
@@ -96,6 +100,9 @@ if __name__ == "__main__":
     argparser.add_argument("-n", "--split", help="Split files into N-length arrays", type=int, default=2000)
     argparser.add_argument("--do-not-send", help="Do not send files, assuming they are already in the server",
                            action="store_true")
+    argparser.add_argument("--no-date", help="Do not add the YEAR/MONTH/DAY in the destination path",
+                           action="store_true")
+
     argparser.add_argument("--usecs", help="use microsecond precision", action="store_true")
 
     args = argparser.parse_args()
@@ -156,4 +163,4 @@ if __name__ == "__main__":
         raise ValueError(f"Sensor name {args.sensor_name} not found in destination path: {args.sensor_name}")
 
     bulk_load_files(dc,all_files, args.path, args.sensor_name, destination, foi_id, log, do_not_send=args.do_not_send,
-                    usecs=args.usecs)
+                    usecs=args.usecs, no_date=args.no_date)
