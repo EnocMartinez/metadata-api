@@ -998,6 +998,7 @@ class MetadataCollector(LoggerSuperclass):
                     "start": pd.Timestamp,
                     "end": pd.Timestamp|None,
                     "coordinates": { "latitude": XX, "longitude": YY, "depth": ZZ }
+                    "sensors": list
                 },
                 ...
             ]
@@ -1011,7 +1012,32 @@ class MetadataCollector(LoggerSuperclass):
             raise ValueError(f"Wrong type in station, expected str or dict, got {type(station)}")
 
         station_id = station["#id"]
-        return self.__get_deployments("stations", station_id)
+
+
+        deployments = self.__get_deployments("stations", station_id)
+
+        # Get all sensors that have been deployed into this platform
+        deployed_sensors = self.db.dataframe_from_query(f"""
+            select doc->'appliedTo'->'@sensors' as sensor, doc->>'time' as timestamp
+            from activities
+            where   doc->'where'->>'@stations' = '{station_id}'
+            ;
+        """)
+
+        for d in deployments:
+            d["sensors"] = []  # create an empty list of sensors
+            start_time = d["start"]
+            end_time = d["end"]
+            if isinstance(end_time, type(None)):
+                # Create date ridiculously in the future
+                end_time = pd.to_datetime("2200-01-01T00:00:00Z")
+
+            for _, row in deployed_sensors.iterrows():
+                timestamp = pd.to_datetime(row["timestamp"])
+                if start_time <= timestamp < end_time:
+                    d["sensors"].append(row["sensor"])
+
+        return deployments
 
     def get_station_coordinates(self, station: any, timestamp=None) -> (float, float, float):
         """
