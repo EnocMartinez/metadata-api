@@ -981,8 +981,11 @@ class MetadataCollector(LoggerSuperclass):
             pass
         else:
             raise ValueError(f"Wrong type in station, expected str or dict, got {type(sensor)}")
-
-        deployments = self.__get_deployments("sensors", sensor_id)
+        try:
+            deployments = self.__get_deployments("sensors", sensor_id)
+        except LookupError:
+            self.warning(f"No deployments for sensor {sensor_id}")
+            return []
         for deployment in deployments:
             station_id = deployment["station"]
             latitude, longitude, depth = self.get_station_coordinates(station_id, timestamp=deployment["start"])

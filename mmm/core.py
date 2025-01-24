@@ -275,7 +275,6 @@ def propagate_metadata_to_sensorthings(dc: DataCollector, collections: str, url,
         rich.print(f"[green]Creating Datastreams for sensor {sensor['#id']}")
         sensor_name = sensor["#id"]
         sensor_deployments = get_sensor_deployments(mc, sensor["#id"])
-        rich.print(sensor_deployments)
         if not sensor_deployments:
             rich.print(f"[yellow]WARNING: no deployments for sensor '{sensor_name}'")
             continue
